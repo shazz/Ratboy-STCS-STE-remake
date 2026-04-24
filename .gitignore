@@ -1,0 +1,13 @@
+build/
+__pycache__/
+*.pyc
+.venv/
+uv.lock
+*.prg
+*.PRG
+*.tos
+*.TOS
+*.o
+.DS_Store
+Thumbs.db
+.claude/settings.local.json

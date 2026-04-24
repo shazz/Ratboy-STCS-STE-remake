@@ -1,0 +1,11 @@
+[project]
+name = "stargoose-st"
+version = "0.1.0"
+description = "Atari STE 68000 recreation of the Bladerunners Stargoose cracktro (1988)"
+requires-python = ">=3.11"
+dependencies = [
+    "Pillow>=10.0",
+]
+
+[tool.uv]
+package = false
