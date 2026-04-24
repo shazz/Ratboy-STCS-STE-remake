@@ -171,14 +171,13 @@ ScrollBlitterShift:
                     move.b      #2, BLIT_HOP(a0)                                 ; HOP=source
                     move.b      #3, BLIT_OP(a0)                                  ; OP=replace (LOP=3, D=S)
                     move.b      #0, BLIT_SKEW(a0)                                ; no skew, FXSR=NFSR=0
-                    ; HOG-mode start + Appendix-A wait. bset/nop/bne is safe in
-                    ; HOG because BUSY transitions 1→0 exactly once, at YCOUNT=0.
-                    move.b      #$C0, BLIT_CTRL(a0)                              ; start, HOG=1
+                    ; Cooperative-mode start + read-only wait. Safe alongside
+                    ; Timer-B because the simplified ISR (no re-arm) fits in
+                    ; the blitter's 64-cycle bus-yield window.
+                    move.b      #$80, BLIT_CTRL(a0)                              ; start, HOG=0
 .wait:
-                    bset.b      #7, BLIT_CTRL(a0)
-                    nop
-                    bne.s       .wait
-                    clr.b       BLIT_CTRL(a0)                                    ; explicit: no stale bit-7 for next setup
+                    tst.b       BLIT_CTRL(a0)
+                    bmi.s       .wait
                     rts
 
 ; ----------------------------------------------------------------------------
@@ -208,12 +207,10 @@ ScrollCopyToScreen:
                     move.l      #scroll_buffer, BLIT_SRC_ADDR(a1)
                     move.l      a0, BLIT_DST_ADDR(a1)
                     move.w      #SCROLL_HEIGHT, BLIT_YCOUNT(a1)
-                    move.b      #$C0, BLIT_CTRL(a1)                              ; start, HOG
+                    move.b      #$80, BLIT_CTRL(a1)                              ; start, cooperative
 .wait1:
-                    bset.b      #7, BLIT_CTRL(a1)
-                    nop
-                    bne.s       .wait1
-                    clr.b       BLIT_CTRL(a1)
+                    tst.b       BLIT_CTRL(a1)
+                    bmi.s       .wait1
 
                     ; ---- row 2 @ SCROLL_Y_2 ----
                     move.l      screen_base, a0
@@ -221,12 +218,10 @@ ScrollCopyToScreen:
                     move.l      #scroll_buffer, BLIT_SRC_ADDR(a1)
                     move.l      a0, BLIT_DST_ADDR(a1)
                     move.w      #SCROLL_HEIGHT, BLIT_YCOUNT(a1)
-                    move.b      #$C0, BLIT_CTRL(a1)                              ; start, HOG
+                    move.b      #$80, BLIT_CTRL(a1)                              ; start, cooperative
 .wait2:
-                    bset.b      #7, BLIT_CTRL(a1)
-                    nop
-                    bne.s       .wait2
-                    clr.b       BLIT_CTRL(a1)
+                    tst.b       BLIT_CTRL(a1)
+                    bmi.s       .wait2
 
                     ; ---- row 3 @ SCROLL_Y_3 ----
                     move.l      screen_base, a0
@@ -234,12 +229,10 @@ ScrollCopyToScreen:
                     move.l      #scroll_buffer, BLIT_SRC_ADDR(a1)
                     move.l      a0, BLIT_DST_ADDR(a1)
                     move.w      #SCROLL_HEIGHT, BLIT_YCOUNT(a1)
-                    move.b      #$C0, BLIT_CTRL(a1)                              ; start, HOG
+                    move.b      #$80, BLIT_CTRL(a1)                              ; start, cooperative
 .wait3:
-                    bset.b      #7, BLIT_CTRL(a1)
-                    nop
-                    bne.s       .wait3
-                    clr.b       BLIT_CTRL(a1)
+                    tst.b       BLIT_CTRL(a1)
+                    bmi.s       .wait3
                     rts
 
 ; ----------------------------------------------------------------------------

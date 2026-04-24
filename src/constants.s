@@ -65,7 +65,7 @@ VRAM_PTR            equ     $44E                    ; logical screen base
 MUSIC_ENABLED       equ     0
 ; 1 = scroller enabled; 0 = skip ScrollerInit + ScrollerStep (no blitter
 ; activity at all — use to verify Timer-B rasters in isolation).
-SCROLLER_ENABLED    equ     0
+SCROLLER_ENABLED    equ     1
 
 ; ----------------------------------------------------------------------------
 ; Trap numbers

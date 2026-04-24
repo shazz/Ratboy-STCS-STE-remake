@@ -69,10 +69,15 @@ ArmTimerBRaster:
                     rts
 
 ; ----------------------------------------------------------------------------
-; TimerBHandler — fires at first INITIAL_COUNT-th HBL after VBL, then every
-; subsequent HBL (via stop→TBDR=1→start re-arm). Writes color 0 from the
-; raster table. At the swap trigger entry, skips color 0 and installs the
-; font palette.
+; TimerBHandler — fires on each Shifter DE pulse (every visible scanline).
+; MFP event-count mode auto-reloads TBDR from its latch, so no re-arm is
+; needed in the hot path — critically, this keeps the ISR short enough to
+; co-exist with a cooperative-mode blitter (the blitter re-arbitrates the
+; bus every 64 cycles; a re-arm sequence would get stretched and corrupt
+; MFP state — see blitter_faq.txt §d and the earlier failed attempt).
+;
+; At the swap-trigger entry, skips the color 0 write and installs the font
+; palette instead (colors 1..15).
 ; ----------------------------------------------------------------------------
 TimerBHandler:
                     move.l      a0, -(sp)
@@ -83,11 +88,6 @@ TimerBHandler:
                     ; Normal: write color 0 from raster table, advance.
                     move.w      (a0)+, SHIFTER_PALETTE
                     move.l      a0, raster_ptr
-
-                    ; Re-arm for next HBL (CSM.S pattern).
-                    move.b      #0, MFP_TBCR
-                    move.b      #1, MFP_TBDR
-                    move.b      #8, MFP_TBCR
                     bclr.b      #0, MFP_ISRA
                     move.l      (sp)+, a0
                     rte
@@ -116,9 +116,6 @@ TimerBHandler:
                     move.w      30(a1), SHIFTER_PALETTE+30
                     move.l      (sp)+, a1
 
-                    move.b      #0, MFP_TBCR
-                    move.b      #1, MFP_TBDR
-                    move.b      #8, MFP_TBCR
                     bclr.b      #0, MFP_ISRA
                     move.l      (sp)+, a0
                     rte
