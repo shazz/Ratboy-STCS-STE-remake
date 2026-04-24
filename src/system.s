@@ -88,6 +88,35 @@ RestoreState:
                     rts
 
 ; ----------------------------------------------------------------------------
+; DisableMouse / EnableMouse — IKBD commands sent via ACIA1 ($FFFC02).
+; Mouse motion → IKBD packet → ACIA L6 IRQ → blocks Timer-B for the
+; duration of TOS's ACIA ISR. Multiple DE pulses pile up while serviced,
+; MFP only latches one pending Timer-B → gradient skips lines = "shake".
+; Disabling mouse stops IKBD packets, gradient stays scanline-locked.
+;
+; ACIA1 status bit 1 = TDRE (transmit data register empty). Wait for it
+; before writing data, otherwise the previous in-flight byte gets clobbered.
+; ----------------------------------------------------------------------------
+ACIA1_STATUS        equ     $FFFC00
+ACIA1_DATA          equ     $FFFC02
+IKBD_DISABLE_MOUSE  equ     $12
+IKBD_REL_MOUSE      equ     $08                             ; default mode (re-enables)
+
+DisableMouse:
+.wait:
+                    btst        #1, ACIA1_STATUS
+                    beq.s       .wait
+                    move.b      #IKBD_DISABLE_MOUSE, ACIA1_DATA
+                    rts
+
+EnableMouse:
+.wait:
+                    btst        #1, ACIA1_STATUS
+                    beq.s       .wait
+                    move.b      #IKBD_REL_MOUSE, ACIA1_DATA
+                    rts
+
+; ----------------------------------------------------------------------------
 ; WaitEscKey — blocks on GEMDOS Cconin until ESC is pressed.
 ; Uses trap #1 so it's safe in either super or user mode.
 ; ----------------------------------------------------------------------------

@@ -25,7 +25,12 @@ TIMER_B_VECTOR      equ     $120
 TIMER_B_INITIAL_COUNT equ   1
 
 ; ----------------------------------------------------------------------------
-; InstallHBL — MFP setup; Timer B stopped, ready to be armed by VBL.
+; InstallHBL — MFP setup; Timer B started in event-count mode and left
+; running for the whole demo. Per-frame phasing is achieved by resetting
+; raster_ptr in the VBL handler — NOT by re-arming Timer B (which gave
+; a 1-scanline frame-to-frame jitter as restart timing crossed DE-pulse
+; boundaries unpredictably). MFP auto-reloads TBDR=1 from its latch so
+; the timer fires on every DE pulse forever.
 ; Supervisor mode required.
 ; ----------------------------------------------------------------------------
 InstallHBL:
@@ -33,15 +38,14 @@ InstallHBL:
                     move.b      MFP_TBCR, old_tbcr
                     move.b      MFP_TBDR, old_tbdr
 
-                    ; Stop Timer B, install handler. Selectively enable
-                    ; Timer B only — DO NOT wipe other MFP IER bits (TOS
-                    ; needs Timer C, ACIA, etc.).
-                    move.b      #0, MFP_TBCR
+                    move.b      #0, MFP_TBCR                            ; stop while configuring
                     move.l      #TimerBHandler, TIMER_B_VECTOR.w
-                    bset.b      #0, MFP_IERA            ; enable Timer B
-                    bset.b      #0, MFP_IMRA            ; unmask Timer B
+                    bset.b      #0, MFP_IERA                            ; enable Timer B
+                    bset.b      #0, MFP_IMRA                            ; unmask Timer B
 
+                    move.b      #TIMER_B_INITIAL_COUNT, MFP_TBDR        ; reload value = 1
                     move.l      #raster_table, raster_ptr
+                    move.b      #8, MFP_TBCR                            ; start, event-count mode
                     rts
 
 ; ----------------------------------------------------------------------------
@@ -57,14 +61,12 @@ RemoveHBL:
                     rts
 
 ; ----------------------------------------------------------------------------
-; ArmTimerBRaster — called from VBL handler each frame. Arms Timer B with
-; INITIAL_COUNT so first fire lands at the first gradient scanline.
-; Resets raster_ptr so handler re-walks the table from the top.
+; ArmTimerBRaster — called from VBL each frame. Just resets raster_ptr;
+; Timer B is left running continuously by InstallHBL. Resetting only the
+; pointer (not the timer itself) eliminates the per-frame restart-jitter
+; that used to shift the gradient up/down by 1 scanline between frames.
 ; ----------------------------------------------------------------------------
 ArmTimerBRaster:
-                    move.b      #0, MFP_TBCR            ; stop
-                    move.b      #TIMER_B_INITIAL_COUNT, MFP_TBDR
-                    move.b      #8, MFP_TBCR            ; event-count, start
                     move.l      #raster_table, raster_ptr
                     rts
 
@@ -93,27 +95,25 @@ TimerBHandler:
                     rte
 
 .install_font:
-                    ; Skip color 0 write (raster gradient owns it).
+                    ; Consume gradient entry (we own color 0 for this scanline).
                     addq.l      #2, a0
                     move.l      a0, raster_ptr
 
+                    ; 8 long writes instead of 15 word writes — ~30% fewer
+                    ; cycles. Overwrites color 0 with font_palette_c1[0] for
+                    ; THIS scanline only; the next gradient ISR (line 78)
+                    ; restores gradient color 0. The font palette's color 0
+                    ; is near-black so the 1-line artifact is invisible.
                     move.l      a1, -(sp)
                     lea         font_palette_c1, a1
-                    move.w      2(a1), SHIFTER_PALETTE+2
-                    move.w      4(a1), SHIFTER_PALETTE+4
-                    move.w      6(a1), SHIFTER_PALETTE+6
-                    move.w      8(a1), SHIFTER_PALETTE+8
-                    move.w      10(a1), SHIFTER_PALETTE+10
-                    move.w      12(a1), SHIFTER_PALETTE+12
-                    move.w      14(a1), SHIFTER_PALETTE+14
-                    move.w      16(a1), SHIFTER_PALETTE+16
-                    move.w      18(a1), SHIFTER_PALETTE+18
-                    move.w      20(a1), SHIFTER_PALETTE+20
-                    move.w      22(a1), SHIFTER_PALETTE+22
-                    move.w      24(a1), SHIFTER_PALETTE+24
-                    move.w      26(a1), SHIFTER_PALETTE+26
-                    move.w      28(a1), SHIFTER_PALETTE+28
-                    move.w      30(a1), SHIFTER_PALETTE+30
+                    move.l      (a1), SHIFTER_PALETTE
+                    move.l      4(a1), SHIFTER_PALETTE+4
+                    move.l      8(a1), SHIFTER_PALETTE+8
+                    move.l      12(a1), SHIFTER_PALETTE+12
+                    move.l      16(a1), SHIFTER_PALETTE+16
+                    move.l      20(a1), SHIFTER_PALETTE+20
+                    move.l      24(a1), SHIFTER_PALETTE+24
+                    move.l      28(a1), SHIFTER_PALETTE+28
                     move.l      (sp)+, a1
 
                     bclr.b      #0, MFP_ISRA

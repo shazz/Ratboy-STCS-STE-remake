@@ -47,6 +47,7 @@ Main:
                     ifne        SCROLLER_ENABLED
                     bsr         ScrollerInit            ; zero scroll row, reset cursor
                     endif
+                    bsr         DisableMouse            ; stop IKBD mouse packets — they shake rasters
                     bsr         InstallVBL              ; claim a vbl-queue slot
                     bsr         InstallHBL              ; hook $68 for the raster gradient
                     ifne        MUSIC_ENABLED
@@ -69,6 +70,7 @@ Main:
                     move.w      #$2700, sr              ; NOW mask all; remove handlers
                     bsr         RemoveHBL
                     bsr         RemoveVBL
+                    bsr         EnableMouse             ; hand mouse back to TOS
                     bsr         RestoreState            ; hand TOS back its palette/res/base
                     bsr         SuperExit               ; back to user mode
 
