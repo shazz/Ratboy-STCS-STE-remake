@@ -171,13 +171,18 @@ ScrollBlitterShift:
                     move.b      #2, BLIT_HOP(a0)                                 ; HOP=source
                     move.b      #3, BLIT_OP(a0)                                  ; OP=replace (LOP=3, D=S)
                     move.b      #0, BLIT_SKEW(a0)                                ; no skew, FXSR=NFSR=0
-                    ; Cooperative-mode start + read-only wait. Safe alongside
-                    ; Timer-B because the simplified ISR (no re-arm) fits in
-                    ; the blitter's 64-cycle bus-yield window.
-                    move.b      #$80, BLIT_CTRL(a0)                              ; start, HOG=0
+                    ; SHIFT runs in HOG mode. It executes in the post-VBL
+                    ; invisible window (~T=1..50 of 113 invisible sl), BEFORE
+                    ; visible starts at T=113, so HOG blocking Timer-B here
+                    ; costs zero rasters. HOG guarantees the bit-7-clears-
+                    ; exactly-once semantics — no cooperative-mode race where
+                    ; the wait loop could exit while the shift is still on
+                    ; line N<34 and the next blit setup would trample the
+                    ; in-flight shift's registers.
+                    move.b      #$C0, BLIT_CTRL(a0)                              ; start, HOG=1
 .wait:
-                    tst.b       BLIT_CTRL(a0)
-                    bmi.s       .wait
+                    btst        #7, BLIT_CTRL(a0)
+                    bne.s       .wait
                     rts
 
 ; ----------------------------------------------------------------------------
@@ -207,10 +212,13 @@ ScrollCopyToScreen:
                     move.l      #scroll_buffer, BLIT_SRC_ADDR(a1)
                     move.l      a0, BLIT_DST_ADDR(a1)
                     move.w      #SCROLL_HEIGHT, BLIT_YCOUNT(a1)
-                    move.b      #$80, BLIT_CTRL(a1)                              ; start, cooperative
+                    move.b      #$80, BLIT_CTRL(a1)                              ; start, cooperative (clears HOG bit)
 .wait1:
-                    tst.b       BLIT_CTRL(a1)
-                    bmi.s       .wait1
+                    bset.b      #7, BLIT_CTRL(a1)
+                    nop
+                    bne.s       .wait1
+                    tst.w       BLIT_YCOUNT(a1)                                  ; verify true completion
+                    bne.s       .wait1
 
                     ; ---- row 2 @ SCROLL_Y_2 ----
                     move.l      screen_base, a0
@@ -218,10 +226,13 @@ ScrollCopyToScreen:
                     move.l      #scroll_buffer, BLIT_SRC_ADDR(a1)
                     move.l      a0, BLIT_DST_ADDR(a1)
                     move.w      #SCROLL_HEIGHT, BLIT_YCOUNT(a1)
-                    move.b      #$80, BLIT_CTRL(a1)                              ; start, cooperative
+                    move.b      #$80, BLIT_CTRL(a1)                              ; start, cooperative (clears HOG bit)
 .wait2:
-                    tst.b       BLIT_CTRL(a1)
-                    bmi.s       .wait2
+                    bset.b      #7, BLIT_CTRL(a1)
+                    nop
+                    bne.s       .wait2
+                    tst.w       BLIT_YCOUNT(a1)
+                    bne.s       .wait2
 
                     ; ---- row 3 @ SCROLL_Y_3 ----
                     move.l      screen_base, a0
@@ -229,10 +240,13 @@ ScrollCopyToScreen:
                     move.l      #scroll_buffer, BLIT_SRC_ADDR(a1)
                     move.l      a0, BLIT_DST_ADDR(a1)
                     move.w      #SCROLL_HEIGHT, BLIT_YCOUNT(a1)
-                    move.b      #$80, BLIT_CTRL(a1)                              ; start, cooperative
+                    move.b      #$80, BLIT_CTRL(a1)                              ; start, cooperative (clears HOG bit)
 .wait3:
-                    tst.b       BLIT_CTRL(a1)
-                    bmi.s       .wait3
+                    bset.b      #7, BLIT_CTRL(a1)
+                    nop
+                    bne.s       .wait3
+                    tst.w       BLIT_YCOUNT(a1)
+                    bne.s       .wait3
                     rts
 
 ; ----------------------------------------------------------------------------
