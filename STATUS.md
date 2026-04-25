@@ -158,9 +158,60 @@ have largely fired. Trades the deepest red of the gradient (entries
 - Combine logo + font palette into a single 16-color set so no swap
   needed (asset redesign).
 
+**Option D: Off-screen buffer + cheap per-frame plots.** Go back to a
+single off-screen `scroll_buffer` (the architecture we had before this
+session's in-place refactor) BUT redesign the per-frame screen update so
+it's far cheaper than the 3 full blitter copies that bit us before.
+
+Key insight: all 3 rows display *identical* pixel content (same text,
+same font palette — only the per-row palette swap, which we're
+considering removing in Option C, would differ). The expensive work
+(rendering glyphs, advancing the scroll position) only needs to happen
+**once per frame**, into the shared buffer. The screen-update is a
+read-once-write-three-places problem.
+
+Sub-options for the "cheap plot":
+
+- **CPU plot via `movem.l` chains.** 3-way fan-out: for each scanline,
+  load 80 visible words from buffer into d0-d7+a2-a6 with one `movem.l`,
+  then write the bank to all 3 screen rows. Cost ≈ 3 × the in-place
+  shift cost, but **deterministic** — no cooperative-mode wait-loop
+  race, no Timer-B-vs-blitter contention, no half-row split. CPU
+  plotting also runs in lockstep with rasters: each scanline of CPU
+  plot takes a fixed # of cycles, so we know exactly when we're past
+  the gradient region.
+
+- **Blitter plot but with SKEW.** Maintain `scroll_buffer` at pword
+  granularity (shift 1 pword every frame, OR less often if combined
+  with hardware scroll). Use blitter SKEW to do sub-pword positioning
+  within the per-row blits. The SKEW is per-blit so it can be set
+  separately for each row's blit — but in our case all rows want the
+  same skew, so it's the same SKEW value × 3 blits.
+
+- **Single-source double-row blit.** If we pack the 3 rows tightly
+  (no gradient gaps between them) at one screen location and use
+  screen-base + LINEWID tricks to *display* them at 3 different Y
+  positions… probably not feasible on STE without exotic tricks.
+
+The CPU-plot variant is the most attractive because it's **race-free
+by construction**. CPU writes are atomic; no blitter state to worry
+about; no FAQ §3.j cooperative warnings. Cost is purely cycles, and
+cycles fit in the 313 sl frame budget. We'd lose blitter parallelism
+but gain determinism and predictability — which is what we keep
+running out of.
+
+Rough cost: 80 words × 34 lines = 2720 source reads. With
+`movem.l (a0)+, d0-d7/a2-a6` (16 longs = 8 words per movem), that's
+2720 / 8 = 340 movems × ~70 cy each = ~24K cy = 47 sl wall. Plus
+3-way write fan-out: 3 × `movem.l d0-d7/a2-a6, (aN)+` × 340 = 3 × 47
+= 141 sl. **Total ≈ 188 sl per frame.** Roughly the same as the
+current 3 cooperative shifts but **deterministic** — no race window.
+
 My instinct: **Option A** is the pragmatic answer if the visual is good
-enough. If 3 rows is non-negotiable, **Option B** with video-counter
-polling is the principled fix that doesn't compromise rasters.
+enough. If 3 rows is non-negotiable, **Option D (CPU plot)** is the
+principled fix — trades blitter parallelism for race-free determinism.
+**Option B (video-counter timing)** is a clever middle ground but
+fragile to timing assumptions.
 
 ## Important non-obvious facts (also in LEARNINGS.md, copied here for handoff)
 
