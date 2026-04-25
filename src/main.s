@@ -87,10 +87,10 @@ MainLoop:
 .tick:
                     WAIT_VBL                            ; block one frame
                     ifne        SCROLLER_ENABLED
-                    bsr         ScrollerStep            ; render+shift+copy at IPL=1
-                                                        ; (runs in post-VBL vblank
-                                                        ; window so HBL stays clear
-                                                        ; through the visible area)
+                    bsr         ScrollerStepVisible     ; rows 2/3 cooperative copy
+                                                        ; (heavy work — render + shift
+                                                        ;  + row 1 — already done in
+                                                        ;  VBL handler in HOG mode)
                     endif
                     bsr         CheckEsc                ; non-blocking keyboard poll
                     tst.w       exit_flag

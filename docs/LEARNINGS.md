@@ -150,6 +150,105 @@ Setup cost ~4 × ~50 cy = 200 cy; transfer at ~4 cy/word × 680 words ≈ 2720 c
 total ~3000 cy per plane × 4 planes = ~12K cy per frame. An order of magnitude
 faster than the CPU 8-bit shift (~132K cy).
 
+### 2026-04-24 — IKBD mouse packets shake the raster gradient
+
+**Symptom:** With Timer-B-driven raster gradient working, gradient is
+*scanline-stable* until the user moves the mouse — then it visibly
+shifts up/down by 1+ scanlines, sometimes flicker-walking.
+
+**Cause:** IKBD on the ACIA fires a L6 interrupt for every mouse delta
+packet. TOS's ACIA ISR drains the byte queue and decodes the packet —
+many cycles, often spanning multiple scanlines. While ACIA's L6 ISR
+is running, Timer-B (also L6, same IPL mask in SR) cannot preempt.
+Multiple DE pulses fire during the ACIA ISR, but MFP only latches ONE
+pending interrupt per channel — so all but one Timer-B fire is lost.
+Each lost fire = one scanline of the gradient table never written =
+visible "shift" of the gradient phase.
+
+**Fix:** at boot, send IKBD command `$12` ("disable mouse") via
+ACIA1 data register `$FFFC02`. Wait for TDRE (status bit 1) before
+the write. Restore on exit with `$08` (set relative — re-enables).
+See `src/system.s` `DisableMouse` / `EnableMouse`.
+
+**Rediscovery cost:** ~hour. Easy to miss because the rasters look
+fine when you're not touching the mouse. Always disable IKBD-mouse
+in any demo that uses Timer-B rasters.
+
+### 2026-04-24 — Don't re-arm Timer-B every frame; let it free-run
+
+**Symptom:** Even with mouse disabled, gradient shifts by exactly 1
+scanline some frames. Pure phase jitter.
+
+**Cause:** ArmTimerBRaster did `stop → write TBDR=1 → start` every
+VBL. The exact moment the start hits depends on the variable latency
+of TOS's vbl-queue dispatch + our handler prologue. Sometimes the
+restart lands just before a DE pulse (first fire on next visible
+line 0), sometimes just after (first fire on visible line 1). That's
+the 1-line jitter.
+
+**Fix:** start Timer-B ONCE in `InstallHBL` and leave it running for
+the lifetime of the demo. The MFP auto-reloads TBDR=1 from its latch
+on every fire (event-count mode, datasheet behavior). Per-frame, the
+VBL handler only resets `raster_ptr`. The first DE pulse of every
+visible area is just "the next event" the timer was already waiting
+for — no per-frame restart, no jitter.
+
+### 2026-04-24 — HOG mode blocks Timer-B; cooperative mode races at line boundaries
+
+**Rule:** STE blitter HOG mode (`$C0` in CTRL) and per-scanline raster
+Timer-B fundamentally cannot coexist during visible area. HOG mode
+stalls the 68000 entirely — Timer-B interrupts queue but only one is
+latched, and all others are lost.
+
+Cooperative mode (`$80`) works in principle: blitter yields the bus
+every 64 cycles, CPU services Timer-B during yields. But two non-obvious
+issues bite:
+
+1. **Wait-loop race.** The canonical Atari `bset/nop/bne` idiom can
+   exit while the blitter still has lines to process — `bset` reads
+   bit 7, sets it, tests its old value. At line-boundary arbitration
+   the blitter can transiently clear bit 7 internally, the read
+   returns 0 → Z=1 → loop exits → CPU writes new blit setup → the
+   in-flight blit picks up new SRC/DST/YCOUNT and produces a corrupt
+   row. Symptom: row N has lines 0..K correct, lines K..33 from a
+   different source. Where K varies frame-to-frame (timing-dependent).
+
+   **Mitigation:** after the bset/nop/bne loop, verify the YCOUNT
+   register is 0 — if not, loop again. YCOUNT is the only state
+   that monotonically reflects real progress. This catches most but
+   not all instances of the race.
+
+2. **ISR stretching.** FAQ §3.j: "the interrupt service routine should
+   finish in less than 64 cycles, otherwise it is potentially stalled
+   by the BLiTTER again." If the ISR is longer than 64 cy, the
+   blitter steals bus mid-ISR, ISR wall-time can exceed 1 scanline,
+   and Timer-B fires queue + collapse exactly like the mouse case
+   above. Symptom: gradient flickers in the visible region where the
+   blitter is active.
+
+**Strategy used here:** split scroller work into HOG-during-vblank
+and cooperative-during-visible. Heaviest work (shift + 1 of 3 row
+copies = 97 sl) runs in the VBL handler in HOG mode — no rasters
+firing yet, no harm. Lighter work (2 cooperative copies = 108 sl)
+runs in MainLoop during visible. See `src/scroller/engine.s`
+`ScrollerStepVblank` / `ScrollerStepVisible`.
+
+### 2026-04-24 — Use `move.b` not `or.b` to start a clean cooperative blit
+
+**Bug:** `or.b #$80, BLIT_CTRL` only sets bit 7. If the previous blit
+was HOG mode (bit 6 = 1), the OR preserves bit 6 — the "cooperative"
+blit is accidentally HOG.
+
+**Fix:** `move.b #$80, BLIT_CTRL` writes the full byte: BUSY=1, HOG=0,
+SMUDGE=0, halftone-line=0. Use this for cooperative starts. Use
+`move.b #$C0` for HOG starts.
+
+The Atari FAQ recommends `or.b #$80` as the canonical first-start in
+cooperative mode, but it's only safe when bit 6 is already known to
+be 0 (e.g., never in HOG before). In a mixed-mode pipeline (HOG shift
+followed by cooperative copies), use explicit `move.b` to break HOG
+residue.
+
 ### 2026-04-22 — HBL autovector ($68) fires on every scanline, not just rendered ones
 
 **Symptom (first):** Raster gradient drifts position frame-to-frame. Different

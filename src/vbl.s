@@ -67,10 +67,17 @@ VBLHandler:
                     ifne        MUSIC_ENABLED
                     jsr         MusicSndhPlay
                     endif
-                    ; ScrollerStep runs in MainLoop. We arm Timer B here so
-                    ; its first fire lands at the first visible scanline
-                    ; (TIMER_B_INITIAL_COUNT away). raster_ptr is reset too.
+                    ; ArmTimerBRaster: just resets raster_ptr (Timer-B is
+                    ; left running by InstallHBL — see hbl.s). Must reset
+                    ; ptr BEFORE the first visible scanline of next frame.
                     bsr         ArmTimerBRaster
+                    ; Heavy scroller work runs HERE in invisible time, in
+                    ; HOG mode. ~103 sl of work fits in the 113 sl post-VBL
+                    ; invisible window. Light cooperative work (rows 2/3)
+                    ; runs in MainLoop after WAIT_VBL.
+                    ifne        SCROLLER_ENABLED
+                    bsr         ScrollerStepVblank
+                    endif
                     movem.l     (sp)+, d0-a6
                     rts
 
