@@ -48,6 +48,7 @@ ScrollerInit:
                     move.w      #SCROLL_EFFECT_DEFAULT, scroll_effect_type
                     move.w      #SCROLL_EFFECT_DEFAULT, d0
                     bsr         SetPalettePointers      ; set palette ptrs based on effect
+                    bsr         SetScrollSpeedExtra     ; set 2x speed flag based on effect
                     clr.w       sine_frame_count
                     move.w      #1, sine_direction      ; start moving down
                     clr.w       sine_offset
@@ -64,10 +65,17 @@ ScrollerInit:
 ; ScrollerStepVblank — full per-VBL pipeline. Called from MainLoop.
 ;
 ; Pipeline: render new pword → shift buffer left → plot via current effect.
+; Some effects (1, 2, 7) need 2× horizontal speed to match the original —
+; for those, render+shift runs twice before plot.
 ; ----------------------------------------------------------------------------
 ScrollerStepVblank:
                     bsr         ScrollRenderNextPword
                     bsr         ScrollShift
+                    tst.w       scroll_speed_extra
+                    beq.s       .plot
+                    bsr         ScrollRenderNextPword
+                    bsr         ScrollShift
+.plot:
                     bsr         ScrollPlotDispatch
                     rts
 
@@ -303,6 +311,23 @@ ScrollPlot:
                     dbra        d7, .line
                     rts
 
+; ----------------------------------------------------------------------------
+; SetScrollSpeedExtra — choose 2x horizontal scroll for effects that need it.
+; Effects 1, 2, 7 match the original at 2 pwords/VBL; others run 1 pword/VBL.
+; In:  d0 = effect type
+; Out: scroll_speed_extra = 0 (default speed) or 1 (extra render+shift per VBL)
+; ----------------------------------------------------------------------------
+SetScrollSpeedExtra:
+                    cmp.w       #1, d0
+                    beq.s       .fast
+                    ; Future: cmp.w #2, d0 / cmp.w #7, d0 — enable when those
+                    ; effects are tuned. Keep them at default speed for now.
+                    clr.w       scroll_speed_extra
+                    rts
+.fast:
+                    move.w      #1, scroll_speed_extra
+                    rts
+
 ; ============================================================================
 ; EFFECT DISPATCHER — routes to the current effect's plot routine
 ; ============================================================================
@@ -375,24 +400,28 @@ ScrollPlotType1:
                     ; Clear scroller region to avoid artifacts from sine movement
                     bsr         ClearScrollerRegion
 
-                    ; Update slow vertical bob (shared with Type7)
-                    addq.w      #1, sine_frame_count
-                    cmp.w       #49, sine_frame_count
-                    blt.s       .no_bob
-                    clr.w       sine_frame_count
+                    ; Trajectory sine via LUT, driven by REAL VBL count so the
+                    ; rate is independent of how many VBLs MainLoop work spans.
+                    ; 50 frames per half-cycle = 1 second top-to-bottom at 50 Hz.
+                    move.w      vbl_counter, d0
+                    move.w      type1_prev_vbl, d1
+                    move.w      d0, type1_prev_vbl
+                    sub.w       d1, d0                  ; d0 = VBLs since last call
+                    add.w       d0, sine_frame_count
+.wrap_check:
+                    cmp.w       #50, sine_frame_count
+                    blt.s       .no_flip
+                    sub.w       #50, sine_frame_count
                     neg.w       sine_direction
-.no_bob:
+                    bra.s       .wrap_check
+.no_flip:
+                    move.w      sine_frame_count, d0
+                    add.w       d0, d0                  ; word index
+                    lea         type1_traj_lut, a3
+                    move.w      0(a3,d0.w), d1          ; LUT value (0..20)
                     move.w      sine_direction, d0
-                    add.w       d0, sine_offset
-                    ; Clamp to ±15 (tighter for 2× tall)
-                    cmp.w       #15, sine_offset
-                    ble.s       .not_high
-                    move.w      #15, sine_offset
-.not_high:
-                    cmp.w       #-15, sine_offset
-                    bge.s       .not_low
-                    move.w      #-15, sine_offset
-.not_low:
+                    muls.w      d1, d0
+                    move.w      d0, sine_offset
 
                     move.l      back_buffer_ptr, a5
                     lea         scroll_buffer, a2
@@ -401,40 +430,24 @@ ScrollPlotType1:
                     move.w      #TYPE1_ROW_Y, d3
                     add.w       sine_offset, d3
 
-                    ; Plot 20 strips with staircase Y offset, vertical doubling
-                    moveq       #0, d5                  ; cumulative Y offset
+                    ; Plot 20 strips: per-strip Y offset from LUT (4 sine cycles)
                     moveq       #19, d6                 ; strip counter
 
 .strip:
-                    ; Staircase pattern (same as Type7)
+                    ; Inside sine: 4 cycles across 20 strips via LUT (period 5, amp ±3)
                     move.w      #19, d0
-                    sub.w       d6, d0                  ; strip index 0-19
+                    sub.w       d6, d0                  ; d0 = strip index 0-19
+                    move.w      d0, d2
+                    add.w       d2, d2                  ; * 2 (word index)
+                    lea         type1_inside_lut, a3
+                    move.w      0(a3,d2.w), d5          ; d5 = absolute Y offset for this strip
 
-                    cmp.w       #6, d0
-                    beq.s       .flat
-                    cmp.w       #14, d0
-                    beq.s       .flat
-                    cmp.w       #6, d0
-                    bhi.s       .check_mid
-                    addq.w      #1, d5                  ; strips 0-5: down
-                    bra.s       .do_plot
-.check_mid:
-                    cmp.w       #14, d0
-                    bhi.s       .go_down
-                    subq.w      #1, d5                  ; strips 7-13: up
-                    bra.s       .do_plot
-.go_down:
-                    addq.w      #1, d5                  ; strips 15-19: down
-.flat:
-.do_plot:
-                    ; Calculate Y = base + staircase
+                    ; Calculate Y = base + per-strip offset
                     move.w      d3, d2
                     add.w       d5, d2
                     mulu.w      #SCREEN_LINE_BYTES, d2
 
                     ; Buffer source for this strip
-                    move.w      #19, d0
-                    sub.w       d6, d0
                     lsl.w       #3, d0                  ; * 8 bytes per pword
                     lea         0(a2,d0.w), a0
 
@@ -893,6 +906,29 @@ ClearScrollerRegion:
                     rts
 
 ; ----------------------------------------------------------------------------
+; type1_inside_lut — per-strip Y offset for Type 1's deformation sine.
+; 2 sine cycles across 20 strips (period 10), amplitude ±3 lines.
+; Pattern derived from sin(2π·2·i/20), rounded.
+; ----------------------------------------------------------------------------
+                    even
+type1_inside_lut:
+                    dc.w        0, 2, 3, 3, 2, 0, -2, -3, -3, -2
+                    dc.w        0, 2, 3, 3, 2, 0, -2, -3, -3, -2
+
+; ----------------------------------------------------------------------------
+; type1_traj_lut — half-sine for Type 1's trajectory bob.
+; 50 entries = 1 second per half-cycle at 50 Hz.
+; Values are |sin(π·i/50)| × 20 rounded; sign is applied via sine_direction.
+; ----------------------------------------------------------------------------
+                    even
+type1_traj_lut:
+                    dc.w        0, 1, 3, 4, 5, 6, 7, 9, 10, 11
+                    dc.w        12, 13, 14, 15, 15, 16, 17, 18, 18, 19
+                    dc.w        19, 19, 20, 20, 20, 20, 20, 20, 20, 19
+                    dc.w        19, 19, 18, 18, 17, 16, 15, 15, 14, 13
+                    dc.w        12, 11, 10, 9, 7, 6, 5, 4, 3, 1
+
+; ----------------------------------------------------------------------------
 ; BSS
 ; ----------------------------------------------------------------------------
                     section     BSS
@@ -906,8 +942,10 @@ scroll_curr_glyph:    ds.l      1       ; current char glyph pointer
 scroll_next_glyph:    ds.l      1       ; next char glyph pointer (for blending)
 
 scroll_effect_type:   ds.w      1       ; 0=3-row fixed, 7=sine wave
-sine_frame_count:     ds.w      1       ; frames since last bob direction change
+scroll_speed_extra:   ds.w      1       ; 0=1x, 1=2x horizontal scroll/VBL
+sine_frame_count:     ds.w      1       ; phase index 0..49 (Type 1 trajectory LUT)
 sine_direction:       ds.w      1       ; +1 or -1 for bob direction
 sine_offset:          ds.w      1       ; current vertical bob offset (scanlines)
+type1_prev_vbl:       ds.w      1       ; vbl_counter snapshot from last Type 1 call
 
                     section     TEXT
