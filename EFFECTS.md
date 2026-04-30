@@ -179,3 +179,40 @@ To **change the gap**, edit `TYPE2_REFLECT_GAP` (in scanlines).
 3. Plots the reflection below, reading the source backward (line 33 → line 0)
    at 2× line stride so each source line appears with a 1-line gap (giving
    the interleaved "ripple" look).
+
+---
+
+## Effect 3 — Sine wave + 1-line interleave + clearing
+
+A single sine-wave scroller drawn with each source scanline followed by a
+1-line gap (so 34 source lines occupy 68 dest lines, every other line
+empty). The scroller region is cleared each frame to avoid trails. Reuses
+Type 1's trajectory and inside-sine LUTs.
+
+### Configuration
+
+| Knob                          | Where                                    | Current value | What it does                              |
+| ----------------------------- | ---------------------------------------- | ------------- | ----------------------------------------- |
+| Base Y position               | `src/scroller/engine.s` `TYPE3_ROW_Y`    | 100           | center of the 68-line interleaved row     |
+| Trajectory amplitude / period | `type1_traj_lut` (shared with Type 1)    | ±20, 1 s half | see Effect 1 section                      |
+| Inside-sine LUT               | `type1_inside_lut` (shared with Type 1)  | 2 cycles, ±3  | see Effect 1 section                      |
+| Horizontal scroll speed       | `SetScrollSpeedExtra`                    | 1× (default)  | add `cmp #3 / beq .fast` to enable 2×     |
+| Clearing                      | `bsr ClearScrollerRegion`                | enabled       | wipes lines 70–199 each frame             |
+
+To **change interleave density**, edit the `lea SCREEN_LINE_BYTES*2(a1), a1`
+in `.scanline`:
+
+* `*2` → 1 line written + 1 gap (current — comb teeth on every other line)
+* `*3` → 1 line written + 2 gap (sparser comb, 102-line tall total)
+* `*1` → no interleave (back to a 34-line solid scroller — same look as
+  the old Type 7)
+
+To **change trajectory or inside-sine**, edit the shared LUTs (see Effect 1).
+Note: changes to the shared LUTs affect both effects.
+
+### Routine
+
+`ScrollPlotType3` — clears the scroller region, computes the trajectory
+sine offset (LUT-driven, vbl_counter-anchored), then plots 20 strips. Each
+strip's Y offset is `TYPE3_ROW_Y + sine_offset + type1_inside_lut[strip]`,
+and each source scanline is written with a 1-line gap below it.

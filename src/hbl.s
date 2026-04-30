@@ -146,8 +146,8 @@ TimerBHandler:
 ; SetPalettePointers — set up palette pointers based on effect type
 ;
 ; d0.w = effect type (0-7)
-; For single-row effects (1, 4, 7): all pointers → c1
-; For multi-row effects: ptr1→c1, ptr2→c2, ptr3→c3
+; For single-row effects (1, 2, 3, 4): all pointers → c1
+; For multi-row effects (0, 5, 6, 7): ptr1→c1, ptr2→c2, ptr3→c3
 ; ----------------------------------------------------------------------------
 SetPalettePointers:
                     lea         font_palette_c1, a0
@@ -157,9 +157,9 @@ SetPalettePointers:
                     beq.s       .single_row
                     cmp.w       #2, d0
                     beq.s       .single_row             ; Type 2 (reflection) uses single palette
+                    cmp.w       #3, d0
+                    beq.s       .single_row             ; Type 3 (sine + interleave) uses single palette
                     cmp.w       #4, d0
-                    beq.s       .single_row
-                    cmp.w       #7, d0
                     beq.s       .single_row
 
                     ; Multi-row: c1, c2, c3

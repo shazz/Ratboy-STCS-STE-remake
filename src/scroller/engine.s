@@ -551,68 +551,86 @@ ScrollPlotType2:
                     rts
 
 ; ----------------------------------------------------------------------------
-; ScrollPlotType3 — Diagonal same direction
+; ScrollPlotType3 — Sine wave + 1-line interleave + frame clearing
 ;
-; 2 rows, both with linear Y offset increasing left-to-right.
-; Creates a diagonal wave where both rows tilt the same way.
+; Same staircase + slow vertical bob as the classic sine scroller, but each
+; source scanline is plotted with a 1-line gap below it: 34 source lines
+; occupy 68 dest lines, every other line cleared. Clears the scroller
+; region each frame (via ClearScrollerRegion) to avoid trails.
+;
+; Staircase Y-offset across 20 strips:
+;   Strips 0-5:   down 1 line per strip
+;   Strip 6:      flat
+;   Strips 7-13:  up 1 line per strip
+;   Strip 14:     flat
+;   Strips 15-19: down 1 line per strip
+; Slow vertical bob (sine_offset) flips direction every 49 frames.
 ; ----------------------------------------------------------------------------
-TYPE3_ROW1_Y        equ     80                      ; row 1 base
-TYPE3_ROW2_Y        equ     145                     ; row 2 base
-TYPE3_SLOPE         equ     1                       ; lines per strip
+TYPE3_ROW_Y         equ     100                     ; centered for 68-line interleaved height
 
 ScrollPlotType3:
+                    bsr         ClearScrollerRegion
+
+                    ; Trajectory sine via LUT, driven by REAL VBL count — same
+                    ; mechanism as Type 1: 50 frames per half-cycle = 1 second
+                    ; top-to-bottom at 50 Hz, robust to MainLoop VBL slippage.
+                    move.w      vbl_counter, d0
+                    move.w      type1_prev_vbl, d1
+                    move.w      d0, type1_prev_vbl
+                    sub.w       d1, d0
+                    add.w       d0, sine_frame_count
+.wrap_check:
+                    cmp.w       #50, sine_frame_count
+                    blt.s       .no_flip
+                    sub.w       #50, sine_frame_count
+                    neg.w       sine_direction
+                    bra.s       .wrap_check
+.no_flip:
+                    move.w      sine_frame_count, d0
+                    add.w       d0, d0
+                    lea         type1_traj_lut, a3
+                    move.w      0(a3,d0.w), d1
+                    move.w      sine_direction, d0
+                    muls.w      d1, d0
+                    move.w      d0, sine_offset
+
                     move.l      back_buffer_ptr, a5
                     lea         scroll_buffer, a2
 
-                    ; Plot 20 strips with linear diagonal offset
+                    move.w      #TYPE3_ROW_Y, d3
+                    add.w       sine_offset, d3         ; d3 = base Y this frame
+
                     moveq       #19, d6                 ; strip counter
 
 .strip:
-                    ; Strip index = 19 - d6
+                    ; Inside sine via LUT — same table as Type 1 (2 sine
+                    ; cycles across 20 strips, amplitude ±3 lines).
                     move.w      #19, d0
-                    sub.w       d6, d0
+                    sub.w       d6, d0                  ; d0 = strip index 0-19
+                    move.w      d0, d2
+                    add.w       d2, d2                  ; * 2 (word index)
+                    lea         type1_inside_lut, a3
+                    move.w      0(a3,d2.w), d5          ; d5 = per-strip Y offset
 
-                    ; Linear slope: offset = strip_index * TYPE3_SLOPE
-                    ; For simplicity: offset = strip_index (1 line per strip)
-                    move.w      d0, d5                  ; d5 = Y offset (0-19 lines)
-
-                    ; Buffer source for this strip
-                    lsl.w       #3, d0                  ; * 8 bytes per pword
-                    lea         0(a2,d0.w), a0
-
-                    ; Row 1: Y = base + offset (diagonal down-right)
-                    move.w      #TYPE3_ROW1_Y, d2
+                    move.w      d3, d2
                     add.w       d5, d2
                     mulu.w      #SCREEN_LINE_BYTES, d2
+
+                    lsl.w       #3, d0                  ; * 8 bytes per pword
+                    lea         0(a2,d0.w), a0          ; buffer column
+
                     move.l      a5, a1
                     adda.l      d2, a1
-                    adda.w      d0, a1
+                    adda.w      d0, a1                  ; screen column
 
-                    ; Row 2: same direction diagonal
-                    move.w      #TYPE3_ROW2_Y, d2
-                    add.w       d5, d2                  ; SAME direction as row 1
-                    mulu.w      #SCREEN_LINE_BYTES, d2
-                    move.l      a5, a3
-                    adda.l      d2, a3
-                    adda.w      d0, a3
-
-                    ; Copy 34 scanlines to both rows
+                    ; 1-line interleave: source +1 line per iter, dest +2 lines
+                    ; (each source row written, 1 line gap below).
                     move.w      #SCROLL_HEIGHT-1, d4
 .scanline:
-                    move.l      (a0), d1
-                    move.l      4(a0), d3
-
-                    ; Row 1
-                    move.l      d1, (a1)
-                    move.l      d3, 4(a1)
-
-                    ; Row 2
-                    move.l      d1, (a3)
-                    move.l      d3, 4(a3)
-
+                    move.l      (a0), (a1)
+                    move.l      4(a0), 4(a1)
                     lea         SCROLL_BUFFER_LINE_BYTES(a0), a0
-                    lea         SCREEN_LINE_BYTES(a1), a1
-                    lea         SCREEN_LINE_BYTES(a3), a3
+                    lea         SCREEN_LINE_BYTES*2(a1), a1
                     dbra        d4, .scanline
 
                     dbra        d6, .strip
@@ -776,101 +794,59 @@ ScrollPlotType6:
                     rts
 
 ; ----------------------------------------------------------------------------
-; ScrollPlotType7 — Sine wave scroller (matches original CONFO.S type7)
+; ScrollPlotType7 — Diagonal same direction (2 rows)
 ;
-; Uses a staircase Y-offset pattern across 20 strips (like original):
-;   Strips 0-5:   go DOWN 2 lines per strip
-;   Strip 6:      flat
-;   Strips 7-13:  go UP 2 lines per strip
-;   Strip 14:     flat
-;   Strips 15-19: go DOWN 2 lines per strip
-;
-; Plus a slow vertical bob (sine_offset) that oscillates every 49 frames.
+; 2 rows, both with linear Y offset increasing left-to-right. Creates a
+; diagonal wave where both rows tilt the same way.
+; (Will be replaced later with the triangle /\ + reflection \/ + bottom row.)
 ; ----------------------------------------------------------------------------
+TYPE7_ROW1_Y        equ     80                      ; row 1 base
+TYPE7_ROW2_Y        equ     145                     ; row 2 base
+TYPE7_SLOPE         equ     1                       ; lines per strip
+
 ScrollPlotType7:
-                    ; Update slow vertical bob every 49 frames
-                    addq.w      #1, sine_frame_count
-                    cmp.w       #49, sine_frame_count
-                    blt.s       .no_bob_change
-                    clr.w       sine_frame_count
-                    neg.w       sine_direction          ; flip direction
-.no_bob_change:
-                    move.w      sine_direction, d0
-                    add.w       d0, sine_offset         ; bob up or down 1 line/frame
-
-                    ; Clamp sine_offset to reasonable range (-20 to +20)
-                    cmp.w       #20, sine_offset
-                    ble.s       .not_too_high
-                    move.w      #20, sine_offset
-.not_too_high:
-                    cmp.w       #-20, sine_offset
-                    bge.s       .not_too_low
-                    move.w      #-20, sine_offset
-.not_too_low:
-
                     move.l      back_buffer_ptr, a5
                     lea         scroll_buffer, a2
 
-                    ; Base Y position + current bob offset
-                    move.w      #SCROLL_Y_2, d3
-                    add.w       sine_offset, d3         ; d3 = base Y for this frame
-
-                    ; Plot 20 strips, accumulating Y offset per strip
-                    moveq       #0, d5                  ; cumulative Y offset (in lines)
-                    moveq       #19, d6                 ; strip counter (19 down to 0)
+                    moveq       #19, d6                 ; strip counter
 
 .strip:
-                    ; Calculate staircase offset based on strip number
-                    ; Strip index = 19 - d6 (so 0,1,2...19)
-                    move.w      #19, d0
-                    sub.w       d6, d0                  ; d0 = strip index 0-19
-
-                    ; Staircase pattern (matching original type7):
-                    cmp.w       #6, d0
-                    beq.s       .flat1
-                    cmp.w       #14, d0
-                    beq.s       .flat2
-                    cmp.w       #6, d0
-                    bhi.s       .check_mid
-                    ; Strips 0-5: go down (1 line per strip = gentler wave)
-                    addq.w      #1, d5
-                    bra.s       .do_plot
-.check_mid:
-                    cmp.w       #14, d0
-                    bhi.s       .go_down
-                    ; Strips 7-13: go up
-                    subq.w      #1, d5
-                    bra.s       .do_plot
-.go_down:
-                    ; Strips 15-19: go down
-                    addq.w      #1, d5
-.flat1:
-.flat2:
-                    ; Strips 6 and 14: stay flat (no Y change)
-.do_plot:
-                    ; Calculate final Y = base + cumulative offset
-                    move.w      d3, d2
-                    add.w       d5, d2
-                    mulu.w      #SCREEN_LINE_BYTES, d2  ; d2 = Y byte offset
-
-                    ; Buffer source for this strip (pword column)
                     move.w      #19, d0
                     sub.w       d6, d0
-                    lsl.w       #3, d0                  ; * 8 bytes
-                    lea         0(a2,d0.w), a0          ; a0 = buffer column
+                    move.w      d0, d5                  ; d5 = Y offset (0-19 lines)
 
-                    ; Screen dest
+                    lsl.w       #3, d0                  ; * 8 bytes per pword
+                    lea         0(a2,d0.w), a0
+
+                    ; Row 1: Y = base + offset (diagonal down-right)
+                    move.w      #TYPE7_ROW1_Y, d2
+                    add.w       d5, d2
+                    mulu.w      #SCREEN_LINE_BYTES, d2
                     move.l      a5, a1
                     adda.l      d2, a1
-                    adda.w      d0, a1                  ; a1 = screen column
+                    adda.w      d0, a1
 
-                    ; Copy 34 scanlines of this pword column
+                    ; Row 2: same direction diagonal
+                    move.w      #TYPE7_ROW2_Y, d2
+                    add.w       d5, d2
+                    mulu.w      #SCREEN_LINE_BYTES, d2
+                    move.l      a5, a3
+                    adda.l      d2, a3
+                    adda.w      d0, a3
+
                     move.w      #SCROLL_HEIGHT-1, d4
 .scanline:
-                    move.l      (a0), (a1)
-                    move.l      4(a0), 4(a1)
+                    move.l      (a0), d1
+                    move.l      4(a0), d3
+
+                    move.l      d1, (a1)
+                    move.l      d3, 4(a1)
+                    move.l      d1, (a3)
+                    move.l      d3, 4(a3)
+
                     lea         SCROLL_BUFFER_LINE_BYTES(a0), a0
                     lea         SCREEN_LINE_BYTES(a1), a1
+                    lea         SCREEN_LINE_BYTES(a3), a3
                     dbra        d4, .scanline
 
                     dbra        d6, .strip
