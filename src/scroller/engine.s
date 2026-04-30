@@ -201,6 +201,8 @@ ScrollPlotDispatch:
                     beq         ScrollPlotType4         ; type 4 = 4× tall spread
                     cmp.w       #5, d0
                     beq         ScrollPlotType5         ; type 5 = converging diagonal
+                    cmp.w       #6, d0
+                    beq         ScrollPlotType6         ; type 6 = 2 fixed rows
                     cmp.w       #7, d0
                     beq         ScrollPlotType7         ; type 7 = sine wave
                     bra         ScrollPlotType0         ; fallback
@@ -619,6 +621,36 @@ ScrollPlotType5:
                     dbra        d4, .scanline
 
                     dbra        d6, .strip
+                    rts
+
+; ----------------------------------------------------------------------------
+; ScrollPlotType6 — 2 fixed horizontal rows (simplest effect)
+;
+; Just two straight horizontal rows, no wave, no diagonal.
+; Like Type 0 but with 2 rows instead of 3.
+; ----------------------------------------------------------------------------
+TYPE6_ROW1_Y        equ     78                      ; row 1 (from original)
+TYPE6_ROW2_Y        equ     119                     ; row 2 (41 lines below)
+
+ScrollPlotType6:
+                    lea         scroll_buffer, a0
+                    move.l      back_buffer_ptr, a5
+                    lea         (TYPE6_ROW1_Y*SCREEN_LINE_BYTES)(a5), a2
+                    lea         (TYPE6_ROW2_Y*SCREEN_LINE_BYTES)(a5), a3
+
+                    move.w      #SCROLL_HEIGHT-1, d7
+.line:
+                    rept        5
+                    movem.l     (a0)+, d0-d6/a6
+                    movem.l     d0-d6/a6, (a2)
+                    lea         32(a2), a2
+                    movem.l     d0-d6/a6, (a3)
+                    lea         32(a3), a3
+                    endr
+                    addq.l      #8, a0                  ; buffer stride 168, read 160
+                    lea         24(a2), a2              ; screen stride 184, wrote 160
+                    lea         24(a3), a3
+                    dbra        d7, .line
                     rts
 
 ; ----------------------------------------------------------------------------
