@@ -181,19 +181,21 @@ ScrollPlot:
 ; EFFECT DISPATCHER — routes to the current effect's plot routine
 ; ============================================================================
 ; scroll_effect_type selects which visual effect to use:
-;   0 = 3 fixed rows (default, current behavior)
+;   0 = 3 fixed rows (default)
+;   1 = 2-row, vertically doubled (2× tall), sine bob
 ;   7 = sine wave (single row with vertical wobble)
 ;
-; To test effects: change scroll_effect_type in BSS or add runtime switching.
+; To test effects: change SCROLL_EFFECT_DEFAULT in constants.s
 ; ============================================================================
 
 ScrollPlotDispatch:
                     move.w      scroll_effect_type, d0
                     beq         ScrollPlotType0         ; type 0 = 3 fixed rows
+                    cmp.w       #1, d0
+                    beq         ScrollPlotType1         ; type 1 = 2× tall + sine
                     cmp.w       #7, d0
                     beq         ScrollPlotType7         ; type 7 = sine wave
-                    ; Default fallback to type 0
-                    bra         ScrollPlotType0
+                    bra         ScrollPlotType0         ; fallback
 
 ; ----------------------------------------------------------------------------
 ; ScrollPlotType0 — 3-row fixed plot (original behavior)
@@ -222,6 +224,105 @@ ScrollPlotType0:
                     lea         24(a3), a3
                     lea         24(a4), a4
                     dbra        d7, .line
+                    rts
+
+; ----------------------------------------------------------------------------
+; ScrollPlotType1 — Single row, vertically doubled (2× tall), sine bob
+;
+; Each source scanline is written TWICE to consecutive dest lines = 2× zoom.
+; Single row centered on screen with staircase sine wave offset.
+; 34 source lines → 68 dest lines, positioned to avoid screen bounds.
+; ----------------------------------------------------------------------------
+TYPE1_ROW_Y         equ     100                     ; centered, leaves room for 68-line height
+
+ScrollPlotType1:
+                    ; Update slow vertical bob (shared with Type7)
+                    addq.w      #1, sine_frame_count
+                    cmp.w       #49, sine_frame_count
+                    blt.s       .no_bob
+                    clr.w       sine_frame_count
+                    neg.w       sine_direction
+.no_bob:
+                    move.w      sine_direction, d0
+                    add.w       d0, sine_offset
+                    ; Clamp to ±15 (tighter for 2× tall)
+                    cmp.w       #15, sine_offset
+                    ble.s       .not_high
+                    move.w      #15, sine_offset
+.not_high:
+                    cmp.w       #-15, sine_offset
+                    bge.s       .not_low
+                    move.w      #-15, sine_offset
+.not_low:
+
+                    move.l      back_buffer_ptr, a5
+                    lea         scroll_buffer, a2
+
+                    ; Base Y + bob offset
+                    move.w      #TYPE1_ROW_Y, d3
+                    add.w       sine_offset, d3
+
+                    ; Plot 20 strips with staircase Y offset, vertical doubling
+                    moveq       #0, d5                  ; cumulative Y offset
+                    moveq       #19, d6                 ; strip counter
+
+.strip:
+                    ; Staircase pattern (same as Type7)
+                    move.w      #19, d0
+                    sub.w       d6, d0                  ; strip index 0-19
+
+                    cmp.w       #6, d0
+                    beq.s       .flat
+                    cmp.w       #14, d0
+                    beq.s       .flat
+                    cmp.w       #6, d0
+                    bhi.s       .check_mid
+                    addq.w      #1, d5                  ; strips 0-5: down
+                    bra.s       .do_plot
+.check_mid:
+                    cmp.w       #14, d0
+                    bhi.s       .go_down
+                    subq.w      #1, d5                  ; strips 7-13: up
+                    bra.s       .do_plot
+.go_down:
+                    addq.w      #1, d5                  ; strips 15-19: down
+.flat:
+.do_plot:
+                    ; Calculate Y = base + staircase
+                    move.w      d3, d2
+                    add.w       d5, d2
+                    mulu.w      #SCREEN_LINE_BYTES, d2
+
+                    ; Buffer source for this strip
+                    move.w      #19, d0
+                    sub.w       d6, d0
+                    lsl.w       #3, d0                  ; * 8 bytes per pword
+                    lea         0(a2,d0.w), a0
+
+                    ; Screen dest
+                    move.l      a5, a1
+                    adda.l      d2, a1
+                    adda.w      d0, a1
+
+                    ; Copy 34 source lines → 68 dest lines (2× vertical)
+                    move.w      #SCROLL_HEIGHT-1, d4
+.scanline:
+                    move.l      (a0), d0                ; planes 0,1
+                    move.l      4(a0), d1               ; planes 2,3
+
+                    ; Write line N
+                    move.l      d0, (a1)
+                    move.l      d1, 4(a1)
+                    ; Write line N+1 (vertical double)
+                    move.l      d0, SCREEN_LINE_BYTES(a1)
+                    move.l      d1, SCREEN_LINE_BYTES+4(a1)
+
+                    ; Advance: source +1 line, dest +2 lines
+                    lea         SCROLL_BUFFER_LINE_BYTES(a0), a0
+                    lea         SCREEN_LINE_BYTES*2(a1), a1
+                    dbra        d4, .scanline
+
+                    dbra        d6, .strip
                     rts
 
 ; ----------------------------------------------------------------------------
