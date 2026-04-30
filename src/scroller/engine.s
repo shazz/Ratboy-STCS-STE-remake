@@ -40,7 +40,7 @@
 ; ScrollerInit — clear scroll_buffer, reset cursor + word state + effect.
 ; ----------------------------------------------------------------------------
 ScrollerInit:
-                    clr.w       scroll_word_in_char
+                    clr.w       scroll_render_phase
                     lea         scrolltext_S1, a0
                     move.l      a0, scroll_text_cursor
 
@@ -70,18 +70,76 @@ ScrollerStepVblank:
                     rts
 
 ; ----------------------------------------------------------------------------
-; ScrollRenderNextPword — write the next 1/3 (8 bytes / 16 pixels) of the
-; current glyph into pword 20 of scroll_buffer (rightmost staging slot).
+; ScrollRenderNextPword — write 16 pixels into pword 20 of scroll_buffer.
 ;
-; scroll_word_in_char cycles 0..2 across calls:
-;   0 — pull next char from scrolltext, compute glyph base, render pword 0
-;   1 — render pword 1 of cached glyph
-;   2 — render pword 2 of cached glyph, reset to 0 next call
+; For 40px glyphs with 0px spacing, we use a 5-phase cycle per 2 characters:
+;   Phase 0: pword 0 of char A (pixels 0-15) — direct copy
+;   Phase 1: pword 1 of char A (pixels 16-31) — direct copy
+;   Phase 2: A[32-39] + B[0-7] — blend high bytes of A_pw2 and B_pw0
+;   Phase 3: B[8-23] — blend low byte B_pw0 + high byte B_pw1
+;   Phase 4: B[24-39] — blend low byte B_pw1 + high byte B_pw2
+;   Then char B becomes new "current" and we repeat from phase 0 for C.
+;
+; Blending: (src_word << 8) | (src_word >> 8) shifts left/right halves.
 ; ----------------------------------------------------------------------------
 ScrollRenderNextPword:
-                    move.w      scroll_word_in_char, d0
-                    bne.s       .not_new_char
+                    move.w      scroll_render_phase, d0
+                    cmp.w       #2, d0
+                    bhs.s       .phase_2_plus
 
+                    ; --- Phase 0 or 1: direct copy from current glyph ---
+                    tst.w       d0
+                    bne.s       .phase1
+                    ; Phase 0: fetch new current char
+                    bsr         .fetch_next_char
+                    move.l      a0, scroll_curr_glyph
+.phase1:
+                    move.l      scroll_curr_glyph, a0
+                    move.w      scroll_render_phase, d2
+                    lsl.w       #3, d2                          ; pword index × 8 bytes
+                    adda.w      d2, a0
+                    bsr         .copy_pword
+                    addq.w      #1, scroll_render_phase
+                    rts
+
+.phase_2_plus:
+                    cmp.w       #2, d0
+                    bne.s       .phase_3_4
+
+                    ; --- Phase 2: blend curr[pw2] high + next[pw0] high ---
+                    bsr         .fetch_next_char
+                    move.l      a0, scroll_next_glyph
+                    move.l      scroll_curr_glyph, a0
+                    lea         16(a0), a0                      ; curr pword 2
+                    move.l      scroll_next_glyph, a1           ; next pword 0
+                    bsr         .blend_high_high
+                    addq.w      #1, scroll_render_phase
+                    rts
+
+.phase_3_4:
+                    cmp.w       #3, d0
+                    bne.s       .phase_4
+
+                    ; --- Phase 3: blend next[pw0] low + next[pw1] high ---
+                    move.l      scroll_next_glyph, a0           ; next pword 0
+                    lea         8(a0), a1                       ; next pword 1
+                    bsr         .blend_low_high
+                    addq.w      #1, scroll_render_phase
+                    rts
+
+.phase_4:
+                    ; --- Phase 4: blend next[pw1] low + next[pw2] high ---
+                    move.l      scroll_next_glyph, a0
+                    lea         8(a0), a0                       ; next pword 1
+                    lea         8(a0), a1                       ; next pword 2
+                    bsr         .blend_low_high
+                    ; Cycle complete: next becomes current, reset phase
+                    move.l      scroll_next_glyph, scroll_curr_glyph
+                    clr.w       scroll_render_phase
+                    rts
+
+; --- .fetch_next_char: read next char from text, return glyph ptr in a0 ---
+.fetch_next_char:
                     move.l      scroll_text_cursor, a0
                     move.b      (a0)+, d1
                     bne.s       .got_char
@@ -89,7 +147,6 @@ ScrollRenderNextPword:
                     move.b      (a0)+, d1
 .got_char:
                     move.l      a0, scroll_text_cursor
-
                     and.w       #$00FF, d1
                     sub.w       #FONT_FIRST_ASCII, d1
                     bpl.s       .range_ok
@@ -102,32 +159,99 @@ ScrollRenderNextPword:
                     mulu.w      #FONT_GLYPH_BYTES, d1
                     lea         font_bitmap, a0
                     adda.l      d1, a0
-                    move.l      a0, scroll_glyph_ptr
-                    moveq       #0, d2
-                    bra.s       .do_render
+                    rts
 
-.not_new_char:
-                    move.l      scroll_glyph_ptr, a0
-                    move.w      d0, d2
-                    lsl.w       #3, d2                          ; pword index × 8 bytes
-
-.do_render:
-                    adda.w      d2, a0                          ; a0 = glyph row 0, pword d0
+; --- .copy_pword: direct copy 34 lines from a0 to scroll_buffer staging ---
+.copy_pword:
                     lea         scroll_buffer+SCROLL_BUFFER_RIGHT_OFFS, a2
-
-                    move.w      #SCROLL_HEIGHT-1, d0
-.line:
-                    move.l      (a0), (a2)                      ; planes 0,1
-                    move.l      4(a0), 4(a2)                    ; planes 2,3
-                    lea         FONT_GLYPH_LINE_B(a0), a0       ; glyph stride (24 bytes)
+                    move.w      #SCROLL_HEIGHT-1, d7
+.copy_line:
+                    move.l      (a0), (a2)
+                    move.l      4(a0), 4(a2)
+                    lea         FONT_GLYPH_LINE_B(a0), a0
                     lea         SCROLL_BUFFER_LINE_BYTES(a2), a2
-                    dbra        d0, .line
+                    dbra        d7, .copy_line
+                    rts
 
-                    addq.w      #1, scroll_word_in_char
-                    cmp.w       #FONT_GLYPH_PWORDS, scroll_word_in_char
-                    blt.s       .done
-                    clr.w       scroll_word_in_char
-.done:
+; --- .blend_high_high: left 8px from a0, right 8px from a1 (both high bytes) ---
+; a0 = source pword A, a1 = source pword B
+; Output: (A & $FF00) | ((B >> 8) & $00FF) for each plane word
+.blend_high_high:
+                    lea         scroll_buffer+SCROLL_BUFFER_RIGHT_OFFS, a2
+                    move.w      #SCROLL_HEIGHT-1, d7
+.bhh_line:
+                    ; Plane 0
+                    move.w      (a0), d0
+                    and.w       #$FF00, d0
+                    move.w      (a1), d1
+                    lsr.w       #8, d1
+                    or.w        d1, d0
+                    move.w      d0, (a2)
+                    ; Plane 1
+                    move.w      2(a0), d0
+                    and.w       #$FF00, d0
+                    move.w      2(a1), d1
+                    lsr.w       #8, d1
+                    or.w        d1, d0
+                    move.w      d0, 2(a2)
+                    ; Plane 2
+                    move.w      4(a0), d0
+                    and.w       #$FF00, d0
+                    move.w      4(a1), d1
+                    lsr.w       #8, d1
+                    or.w        d1, d0
+                    move.w      d0, 4(a2)
+                    ; Plane 3
+                    move.w      6(a0), d0
+                    and.w       #$FF00, d0
+                    move.w      6(a1), d1
+                    lsr.w       #8, d1
+                    or.w        d1, d0
+                    move.w      d0, 6(a2)
+                    lea         FONT_GLYPH_LINE_B(a0), a0
+                    lea         FONT_GLYPH_LINE_B(a1), a1
+                    lea         SCROLL_BUFFER_LINE_BYTES(a2), a2
+                    dbra        d7, .bhh_line
+                    rts
+
+; --- .blend_low_high: left 8px from a0 low byte, right 8px from a1 high byte ---
+; Output: ((A << 8) & $FF00) | ((B >> 8) & $00FF) for each plane word
+.blend_low_high:
+                    lea         scroll_buffer+SCROLL_BUFFER_RIGHT_OFFS, a2
+                    move.w      #SCROLL_HEIGHT-1, d7
+.blh_line:
+                    ; Plane 0
+                    move.w      (a0), d0
+                    lsl.w       #8, d0
+                    move.w      (a1), d1
+                    lsr.w       #8, d1
+                    or.w        d1, d0
+                    move.w      d0, (a2)
+                    ; Plane 1
+                    move.w      2(a0), d0
+                    lsl.w       #8, d0
+                    move.w      2(a1), d1
+                    lsr.w       #8, d1
+                    or.w        d1, d0
+                    move.w      d0, 2(a2)
+                    ; Plane 2
+                    move.w      4(a0), d0
+                    lsl.w       #8, d0
+                    move.w      4(a1), d1
+                    lsr.w       #8, d1
+                    or.w        d1, d0
+                    move.w      d0, 4(a2)
+                    ; Plane 3
+                    move.w      6(a0), d0
+                    lsl.w       #8, d0
+                    move.w      6(a1), d1
+                    lsr.w       #8, d1
+                    or.w        d1, d0
+                    move.w      d0, 6(a2)
+                    lea         FONT_GLYPH_LINE_B(a0), a0
+                    lea         FONT_GLYPH_LINE_B(a1), a1
+                    lea         SCROLL_BUFFER_LINE_BYTES(a2), a2
+                    dbra        d7, .blh_line
                     rts
 
 ; ----------------------------------------------------------------------------
@@ -755,9 +879,10 @@ ScrollPlotType7:
                     even
 scroll_buffer:        ds.b      SCROLL_BUFFER_BYTES
 
-scroll_word_in_char:  ds.w      1
+scroll_render_phase:  ds.w      1       ; 0-4 phase in 5-pword cycle
 scroll_text_cursor:   ds.l      1
-scroll_glyph_ptr:     ds.l      1
+scroll_curr_glyph:    ds.l      1       ; current char glyph pointer
+scroll_next_glyph:    ds.l      1       ; next char glyph pointer (for blending)
 
 scroll_effect_type:   ds.w      1       ; 0=3-row fixed, 7=sine wave
 sine_frame_count:     ds.w      1       ; frames since last bob direction change

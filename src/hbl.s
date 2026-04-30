@@ -79,22 +79,44 @@ ArmTimerBRaster:
 ; 32 pixels. Skipping the write creates a 5-line "freeze" in the gradient
 ; (imperceptible since it's in the red-to-dark transition area).
 ;
-; Also handles font palette swap at PALETTE_SWAP_ENTRY (line 77).
+; Also handles font palette swaps: c1 at line 77, c2 at line 118, c3 at line 159.
 ; ----------------------------------------------------------------------------
 RASTER_SKIP_START   equ     raster_table+107*2      ; scanline 107
 RASTER_SKIP_END     equ     raster_table+112*2      ; scanline 112 (exclusive)
-RASTER_SWAP_ADDR    equ     raster_table+PALETTE_SWAP_ENTRY*2
+RASTER_SWAP_C1      equ     raster_table+77*2       ; before row 1 (Y=78)
+RASTER_SWAP_C2      equ     raster_table+118*2      ; before row 2 (Y=119)
+RASTER_SWAP_C3      equ     raster_table+159*2      ; before row 3 (Y=160)
 
 TimerBHandler:
                     move.l      a0, -(sp)
                     move.l      raster_ptr, a0
 
-                    ; Check for font palette swap at line 77
-                    cmpa.l      #RASTER_SWAP_ADDR, a0
-                    bne.s       .check_skip
-                    ; Install font palette (colors 1-15)
+                    ; Check for font palette swaps at row boundaries
+                    cmpa.l      #RASTER_SWAP_C1, a0
+                    beq.s       .swap_c1
+                    cmpa.l      #RASTER_SWAP_C2, a0
+                    beq.s       .swap_c2
+                    cmpa.l      #RASTER_SWAP_C3, a0
+                    beq.s       .swap_c3
+                    bra.s       .check_skip
+
+.swap_c1:
                     movem.l     d0-d7, -(sp)
                     movem.l     font_palette_c1+2, d0-d6
+                    movem.l     d0-d6, SHIFTER_PALETTE+2
+                    movem.l     (sp)+, d0-d7
+                    bra.s       .check_skip
+
+.swap_c2:
+                    movem.l     d0-d7, -(sp)
+                    movem.l     font_palette_c2+2, d0-d6
+                    movem.l     d0-d6, SHIFTER_PALETTE+2
+                    movem.l     (sp)+, d0-d7
+                    bra.s       .check_skip
+
+.swap_c3:
+                    movem.l     d0-d7, -(sp)
+                    movem.l     font_palette_c3+2, d0-d6
                     movem.l     d0-d6, SHIFTER_PALETTE+2
                     movem.l     (sp)+, d0-d7
 

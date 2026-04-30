@@ -16,21 +16,17 @@
 font_bitmap:
                     incbin      'build/font.bin'
 
-                    ; Row 1 palette (c1 via red-sentinel font) — slot 0 is
-                    ; transparent-black so index-0 pixels track the raster
-                    ; gradient at render time.
+                    ; Row palettes — c1 from PNG, c2/c3 manually created with
+                    ; same index structure but different gradient colors (5-10)
                     even
 font_palette:
 font_palette_c1:
-                    incbin      'build/font.pal'
+                    incbin      'build/font.pal'    ; purple gradient
 
-                    ; Row 2 and 3 palette variants — same glyph shapes in
-                    ; the PNGs, different colorings. We extract .pal only;
-                    ; the .bin for c2/c3 is generated but unused.
                     even
 font_palette_c2:
-                    incbin      'build/font_c2.pal'
+                    incbin      'build/font_c2.pal' ; grayscale gradient
 
                     even
 font_palette_c3:
-                    incbin      'build/font_c3.pal'
+                    incbin      'build/font_c3.pal' ; cyan gradient
