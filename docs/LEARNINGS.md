@@ -325,3 +325,68 @@ a demo this is perfect: clean start, clean shutdown.
 Manual workflow for now: copy `build/STRGOOSE.PRG` into a mounted `AUTO/`.
 Could automate in `build.py` by mounting `build/hd_c/` and dropping the PRG
 in `build/hd_c/AUTO/` — defer until it becomes annoying.
+
+---
+
+## Scroll effects architecture (session 5)
+
+### 2026-04-29 — Modular effect dispatcher pattern
+
+**Pattern:** Use a dispatcher that routes to effect-specific plot routines:
+```asm
+ScrollPlotDispatch:
+    move.w      scroll_effect_type, d0
+    beq         ScrollPlotType0
+    cmp.w       #1, d0
+    beq         ScrollPlotType1
+    ; ... etc
+    bra         ScrollPlotType0    ; fallback
+```
+
+**Why it works:** Each effect is a self-contained function. Easy to:
+- Test effects in isolation (change `SCROLL_EFFECT_DEFAULT`)
+- Compare our implementation against original CONFO.S
+- Add new effects without touching existing code
+
+**Implementation notes:**
+- Effects share `scroll_buffer` (21 pwords × 34 lines)
+- Each effect calculates its own Y positions per strip (20 strips = 320 pixels)
+- Vertical doubling (Type 1, Type 4) writes each source line multiple times
+- Sine/diagonal effects use per-strip Y offset calculations
+
+### 2026-04-29 — Strip-based column plotting for wave effects
+
+**Pattern:** Process 20 "strips" (pword columns, 16 pixels each) left-to-right,
+calculating Y offset per strip to create wave/diagonal shapes.
+
+**Original CONFO.S approach:**
+- Loop counter `d0` = 19 down to 0 (right to left in original)
+- Cumulative Y offset modified per strip iteration
+- Different offset rules create different wave patterns
+
+**Our implementation:**
+- Strip index = 19 - d6 (0 to 19, left to right)
+- Calculate offset based on strip index position
+- Apply offset to Y position before plotting
+
+**Wave patterns:**
+- Type 7 (sine): staircase pattern — strips 0-5 down, 6 flat, 7-13 up, 14 flat, 15-19 down
+- Type 5 (converge): min(strip, 19-strip) creates symmetric bulge at center
+- Type 3 (diagonal): linear offset = strip index
+
+### 2026-04-29 — Vertical scaling via line repetition
+
+**For 2× tall (Type 1):** Write each source scanline twice:
+```asm
+move.l      d0, (a1)
+move.l      d1, 4(a1)
+move.l      d0, SCREEN_LINE_BYTES(a1)
+move.l      d1, SCREEN_LINE_BYTES+4(a1)
+lea         SCREEN_LINE_BYTES*2(a1), a1   ; advance 2 lines
+```
+
+**For 4× tall (Type 4):** Write each source scanline four times. Only plot
+25 of 34 source lines to fit on screen (25 × 4 = 100 lines output).
+
+**Tradeoff:** Larger output means fewer source lines fit — 4× tall truncates
+the bottom of glyphs slightly.
