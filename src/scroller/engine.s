@@ -543,20 +543,20 @@ ScrollPlotType4:
                     rts
 
 ; ----------------------------------------------------------------------------
-; ScrollPlotType5 — Converging diagonal (bulge in center)
+; ScrollPlotType5 — Converging diagonal (merge on LEFT)
 ;
-; 2 rows that diverge toward the CENTER and converge at the edges.
-; Like original CONFO.S: rows closest at LEFT edge, bulge apart in middle,
-; come back together at RIGHT edge.
+; 2 rows that converge on the LEFT edge and diverge toward the RIGHT.
+; Original CONFO.S: rows closest at LEFT, furthest apart at RIGHT.
+; Top row tilts down toward right, bottom row tilts up toward right.
 ; ----------------------------------------------------------------------------
-TYPE5_ROW1_Y        equ     95                      ; row 1 base (at edges)
-TYPE5_ROW2_Y        equ     130                     ; row 2 base (at edges) - 35 line gap
+TYPE5_ROW1_Y        equ     100                     ; row 1 base (at left edge)
+TYPE5_ROW2_Y        equ     135                     ; row 2 base (at left edge)
 
 ScrollPlotType5:
                     move.l      back_buffer_ptr, a5
                     lea         scroll_buffer, a2
 
-                    ; Plot 20 strips - diverge toward center, converge at edges
+                    ; Plot 20 strips - converge on left, diverge on right
                     moveq       #19, d6                 ; strip counter
 
 .strip:
@@ -565,19 +565,12 @@ ScrollPlotType5:
                     sub.w       d6, d0
                     move.w      d0, d3                  ; save strip index
 
-                    ; Calculate offset based on distance from edges
-                    ; Strip 0 and 19: offset = 0 (merged)
-                    ; Strip 9-10 (center): offset = max (diverged)
-                    ; Pattern: offset = min(strip, 19-strip)
-                    move.w      #19, d5
-                    sub.w       d0, d5                  ; d5 = 19 - strip
-                    cmp.w       d0, d5
-                    bls.s       .use_d5
-                    move.w      d0, d5                  ; d5 = min(strip, 19-strip)
-.use_d5:
-                    ; d5 = 0,1,2...9,9...2,1,0 across strips (peak at center)
-                    ; Row 1 goes UP by d5, Row 2 goes DOWN by d5
-                    move.w      d5, d7                  ; d7 = same offset for row 2
+                    ; Linear divergence: offset increases with strip index
+                    ; Strip 0 (left): offset = 0 (merged)
+                    ; Strip 19 (right): offset = 9 (diverged)
+                    move.w      d0, d5
+                    lsr.w       #1, d5                  ; d5 = strip/2 (0..9)
+                    move.w      d5, d7                  ; same magnitude for row 2
 
 .do_plot:
                     ; Buffer source for this strip
@@ -585,17 +578,17 @@ ScrollPlotType5:
                     lsl.w       #3, d0                  ; * 8 bytes per pword
                     lea         0(a2,d0.w), a0
 
-                    ; Row 1: Y = base - offset (goes UP toward center)
+                    ; Row 1: Y = base + offset (tilts DOWN toward right)
                     move.w      #TYPE5_ROW1_Y, d2
-                    sub.w       d5, d2
+                    add.w       d5, d2
                     mulu.w      #SCREEN_LINE_BYTES, d2
                     move.l      a5, a1
                     adda.l      d2, a1
                     adda.w      d0, a1
 
-                    ; Row 2: Y = base + offset (goes DOWN toward center)
+                    ; Row 2: Y = base - offset (tilts UP toward right = diverges from row 1)
                     move.w      #TYPE5_ROW2_Y, d2
-                    add.w       d7, d2
+                    sub.w       d7, d2
                     mulu.w      #SCREEN_LINE_BYTES, d2
                     move.l      a5, a3
                     adda.l      d2, a3
