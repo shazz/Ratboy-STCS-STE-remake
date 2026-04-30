@@ -81,20 +81,23 @@ ArmTimerBRaster:
 ;
 ; Also handles font palette swaps: c1 at line 77, c2 at line 118, c3 at line 159.
 ; ----------------------------------------------------------------------------
-RASTER_SKIP_START   equ     raster_table+107*2      ; scanline 107
-RASTER_SKIP_END     equ     raster_table+112*2      ; scanline 112 (exclusive)
-RASTER_SWAP_C1      equ     raster_table+77*2       ; before row 1 (Y=78)
-RASTER_SWAP_C2      equ     raster_table+118*2      ; before row 2 (Y=119)
-RASTER_SWAP_C3      equ     raster_table+159*2      ; before row 3 (Y=160)
+RASTER_SKIP_START       equ     raster_table+107*2      ; scanline 107
+RASTER_SKIP_END         equ     raster_table+112*2      ; scanline 112 (exclusive)
+RASTER_SWAP_C1          equ     raster_table+77*2       ; before row 1 (Y=78)
+RASTER_SWAP_C2_DEFAULT  equ     raster_table+118*2      ; multi-row layout (Y=119)
+RASTER_SWAP_C2_TYPE4    equ     raster_table+131*2      ; mirror line (Y=132)
+RASTER_SWAP_C3          equ     raster_table+159*2      ; before row 3 (Y=160)
 
 TimerBHandler:
                     move.l      a0, -(sp)
                     move.l      raster_ptr, a0
 
-                    ; Check for font palette swaps at row boundaries
+                    ; Check for font palette swaps at row boundaries.
+                    ; The c2 swap address is a variable so effect 4 can move
+                    ; the swap from line 118 to line 131 (mirror line).
                     cmpa.l      #RASTER_SWAP_C1, a0
                     beq.s       .swap_c1
-                    cmpa.l      #RASTER_SWAP_C2, a0
+                    cmpa.l      raster_swap_c2_addr, a0
                     beq.s       .swap_c2
                     cmpa.l      #RASTER_SWAP_C3, a0
                     beq.s       .swap_c3
@@ -143,26 +146,34 @@ TimerBHandler:
                     rte
 
 ; ----------------------------------------------------------------------------
-; SetPalettePointers — set up palette pointers based on effect type
+; SetPalettePointers — set up palette pointers + c2 swap address based on
+; effect type.
 ;
 ; d0.w = effect type (0-7)
-; For single-row effects (1, 2, 3, 4): all pointers → c1
-; For multi-row effects (0, 5, 6, 7): ptr1→c1, ptr2→c2, ptr3→c3
+; - Single-row effects (1, 2, 3, 5): all pointers → c1
+; - Multi-row effects (0, 6, 7):     ptr1→c1, ptr2→c2, ptr3→c3
+; - Type 4 mirror:                   ptr1→c1, ptr2→c2, ptr3→c2
+;                                     c2 swap relocated to line 131 (mirror)
 ; ----------------------------------------------------------------------------
 SetPalettePointers:
                     lea         font_palette_c1, a0
                     move.l      a0, font_pal_ptr1       ; row 1 always c1
 
+                    ; Default c2 swap fires at line 118 (multi-row layout)
+                    move.l      #RASTER_SWAP_C2_DEFAULT, raster_swap_c2_addr
+
+                    cmp.w       #4, d0
+                    beq.s       .type_4_mirror
                     cmp.w       #1, d0
                     beq.s       .single_row
                     cmp.w       #2, d0
                     beq.s       .single_row             ; Type 2 (reflection) uses single palette
                     cmp.w       #3, d0
                     beq.s       .single_row             ; Type 3 (sine + interleave) uses single palette
-                    cmp.w       #4, d0
-                    beq.s       .single_row
+                    cmp.w       #5, d0
+                    beq.s       .single_row             ; Type 5 (4× tall stretch) uses single palette
 
-                    ; Multi-row: c1, c2, c3
+                    ; Multi-row (0, 6, 7): c1, c2, c3
                     lea         font_palette_c2, a0
                     move.l      a0, font_pal_ptr2
                     lea         font_palette_c3, a0
@@ -174,6 +185,17 @@ SetPalettePointers:
                     lea         font_palette_c1, a0
                     move.l      a0, font_pal_ptr2
                     move.l      a0, font_pal_ptr3
+                    rts
+
+.type_4_mirror:
+                    ; Mirror: c1 above the symmetry line, c2 below.
+                    ; Move the c2 swap from line 118 to line 131 (just before
+                    ; the mirror line at Y=132). ptr3 stays c2 so the c3
+                    ; swap at line 159 doesn't switch back.
+                    lea         font_palette_c2, a0
+                    move.l      a0, font_pal_ptr2
+                    move.l      a0, font_pal_ptr3
+                    move.l      #RASTER_SWAP_C2_TYPE4, raster_swap_c2_addr
                     rts
 
 ; ----------------------------------------------------------------------------
@@ -189,5 +211,6 @@ raster_ptr:         ds.l        1
 font_pal_ptr1:      ds.l        1               ; palette pointer for row 1
 font_pal_ptr2:      ds.l        1               ; palette pointer for row 2
 font_pal_ptr3:      ds.l        1               ; palette pointer for row 3
+raster_swap_c2_addr: ds.l       1               ; raster_table addr where c2 swap fires
 
                     section     TEXT

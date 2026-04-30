@@ -637,41 +637,107 @@ ScrollPlotType3:
                     rts
 
 ; ----------------------------------------------------------------------------
-; ScrollPlotType4 — Spread vertical (4× tall)
+; ScrollPlotType4 — Two diagonal scrollers mirrored across a horizontal line
 ;
-; Each source scanline written 4 times to consecutive dest lines = 4× zoom.
-; Only plots 25 source lines (of 34) to fit on screen: 25×4 = 100 dest lines.
-; Single centered row, no sine wave (pure vertical stretch).
+; Row 1 slopes DOWN to the right (1 line per strip). Row 2 is the vertical
+; mirror image of row 1 across the symmetry line (TYPE4_MIRROR_Y), rendered
+; upside-down. The two rows touch at the symmetry line on the right edge of
+; the screen and open up like an X to the left.
+;
+; Geometry per strip s (0..19):
+;   Row 1 occupies Y = TYPE4_ROW1_TOP_Y + s ... TYPE4_ROW1_TOP_Y + s + 33
+;   Row 2 (mirror): source line k → Y = 2·MIRROR − TYPE4_ROW1_TOP_Y − s − k
+;     i.e., starts at Y = 2·MIRROR − T1 − s and decrements per source line.
+;
+; Default values pin the mirror at the lowest extent of row 1 (= row 1's
+; bottom at strip 19), so row 1 and row 2 just touch at strip 19.
 ; ----------------------------------------------------------------------------
-TYPE4_ROW_Y         equ     90                      ; centered for 100-line output
-TYPE4_SRC_LINES     equ     25                      ; only plot 25 of 34 lines
+TYPE4_ROW1_TOP_Y    equ     80                      ; row 1 top at strip 0
+TYPE4_MIRROR_Y      equ     132                     ; horizontal symmetry line
+TYPE4_ROW2_START_Y  equ     2*TYPE4_MIRROR_Y-TYPE4_ROW1_TOP_Y       ; = 184
 
 ScrollPlotType4:
                     move.l      back_buffer_ptr, a5
                     lea         scroll_buffer, a2
 
-                    ; Plot 20 strips (no sine offset, just stretch)
                     moveq       #19, d6                 ; strip counter
 
 .strip:
-                    ; Buffer source for this strip
+                    move.w      #19, d0
+                    sub.w       d6, d0                  ; d0 = strip index s (0..19)
+                    move.w      d0, d3                  ; save s
+
+                    lsl.w       #3, d0                  ; * 8 bytes per pword
+                    lea         0(a2,d0.w), a0          ; buffer source
+
+                    ; Row 1: Y_top = TYPE4_ROW1_TOP_Y + s
+                    move.w      #TYPE4_ROW1_TOP_Y, d2
+                    add.w       d3, d2
+                    mulu.w      #SCREEN_LINE_BYTES, d2
+                    move.l      a5, a1
+                    adda.l      d2, a1
+                    adda.w      d0, a1
+
+                    ; Row 2 start (source line 0): Y = 2·MIRROR − T1 − s
+                    ; Each source line decrements dest Y → upside-down render.
+                    move.w      #TYPE4_ROW2_START_Y, d2
+                    sub.w       d3, d2
+                    mulu.w      #SCREEN_LINE_BYTES, d2
+                    move.l      a5, a3
+                    adda.l      d2, a3
+                    adda.w      d0, a3
+
+                    ; Plot 34 source lines: row 1 forward, row 2 backward.
+                    move.w      #SCROLL_HEIGHT-1, d4
+.scanline:
+                    move.l      (a0), d1
+                    move.l      4(a0), d2
+
+                    move.l      d1, (a1)
+                    move.l      d2, 4(a1)
+                    move.l      d1, (a3)
+                    move.l      d2, 4(a3)
+
+                    lea         SCROLL_BUFFER_LINE_BYTES(a0), a0
+                    lea         SCREEN_LINE_BYTES(a1), a1
+                    lea         -SCREEN_LINE_BYTES(a3), a3
+                    dbra        d4, .scanline
+
+                    dbra        d6, .strip
+                    rts
+
+; ----------------------------------------------------------------------------
+; ScrollPlotType5 — Spread vertical (4× tall)
+;
+; Each source scanline written 4 times to consecutive dest lines = 4× zoom.
+; Only plots 25 source lines (of 34) to fit on screen: 25×4 = 100 dest lines.
+; Single centered row, no sine wave (pure vertical stretch).
+; (Will be replaced later when we tackle "real effect 5".)
+; ----------------------------------------------------------------------------
+TYPE5_ROW_Y         equ     90                      ; centered for 100-line output
+TYPE5_SRC_LINES     equ     25                      ; only plot 25 of 34 lines
+
+ScrollPlotType5:
+                    move.l      back_buffer_ptr, a5
+                    lea         scroll_buffer, a2
+
+                    moveq       #19, d6                 ; strip counter
+
+.strip:
                     move.w      #19, d0
                     sub.w       d6, d0
                     lsl.w       #3, d0                  ; * 8 bytes per pword
                     lea         0(a2,d0.w), a0
 
-                    ; Screen dest
                     move.l      a5, a1
-                    lea         TYPE4_ROW_Y*SCREEN_LINE_BYTES(a1), a1
+                    lea         TYPE5_ROW_Y*SCREEN_LINE_BYTES(a1), a1
                     adda.w      d0, a1
 
-                    ; Copy 25 source lines → 100 dest lines (4× vertical)
-                    move.w      #TYPE4_SRC_LINES-1, d4
+                    move.w      #TYPE5_SRC_LINES-1, d4
 .scanline:
                     move.l      (a0), d0                ; planes 0,1
                     move.l      4(a0), d1               ; planes 2,3
 
-                    ; Write 4 consecutive lines
                     move.l      d0, (a1)
                     move.l      d1, 4(a1)
                     move.l      d0, SCREEN_LINE_BYTES(a1)
@@ -681,83 +747,8 @@ ScrollPlotType4:
                     move.l      d0, SCREEN_LINE_BYTES*3(a1)
                     move.l      d1, SCREEN_LINE_BYTES*3+4(a1)
 
-                    ; Advance: source +1 line, dest +4 lines
                     lea         SCROLL_BUFFER_LINE_BYTES(a0), a0
                     lea         SCREEN_LINE_BYTES*4(a1), a1
-                    dbra        d4, .scanline
-
-                    dbra        d6, .strip
-                    rts
-
-; ----------------------------------------------------------------------------
-; ScrollPlotType5 — Converging diagonal (merge on LEFT)
-;
-; 2 rows that converge on the LEFT edge and diverge toward the RIGHT.
-; Original CONFO.S: rows closest at LEFT, furthest apart at RIGHT.
-; Top row tilts down toward right, bottom row tilts up toward right.
-; ----------------------------------------------------------------------------
-TYPE5_ROW1_Y        equ     100                     ; row 1 base (at left edge)
-TYPE5_ROW2_Y        equ     135                     ; row 2 base (at left edge)
-
-ScrollPlotType5:
-                    move.l      back_buffer_ptr, a5
-                    lea         scroll_buffer, a2
-
-                    ; Plot 20 strips - converge on left, diverge on right
-                    moveq       #19, d6                 ; strip counter
-
-.strip:
-                    ; Strip index = 19 - d6 (0 to 19, left to right)
-                    move.w      #19, d0
-                    sub.w       d6, d0
-                    move.w      d0, d3                  ; save strip index
-
-                    ; Linear divergence: offset increases with strip index
-                    ; Strip 0 (left): offset = 0 (merged)
-                    ; Strip 19 (right): offset = 9 (diverged)
-                    move.w      d0, d5
-                    lsr.w       #1, d5                  ; d5 = strip/2 (0..9)
-                    move.w      d5, d7                  ; same magnitude for row 2
-
-.do_plot:
-                    ; Buffer source for this strip
-                    move.w      d3, d0
-                    lsl.w       #3, d0                  ; * 8 bytes per pword
-                    lea         0(a2,d0.w), a0
-
-                    ; Row 1: Y = base + offset (tilts DOWN toward right)
-                    move.w      #TYPE5_ROW1_Y, d2
-                    add.w       d5, d2
-                    mulu.w      #SCREEN_LINE_BYTES, d2
-                    move.l      a5, a1
-                    adda.l      d2, a1
-                    adda.w      d0, a1
-
-                    ; Row 2: Y = base - offset (tilts UP toward right = diverges from row 1)
-                    move.w      #TYPE5_ROW2_Y, d2
-                    sub.w       d7, d2
-                    mulu.w      #SCREEN_LINE_BYTES, d2
-                    move.l      a5, a3
-                    adda.l      d2, a3
-                    adda.w      d0, a3
-
-                    ; Copy 34 scanlines to both rows
-                    move.w      #SCROLL_HEIGHT-1, d4
-.scanline:
-                    move.l      (a0), d1
-                    move.l      4(a0), d2
-
-                    ; Row 1
-                    move.l      d1, (a1)
-                    move.l      d2, 4(a1)
-
-                    ; Row 2
-                    move.l      d1, (a3)
-                    move.l      d2, 4(a3)
-
-                    lea         SCROLL_BUFFER_LINE_BYTES(a0), a0
-                    lea         SCREEN_LINE_BYTES(a1), a1
-                    lea         SCREEN_LINE_BYTES(a3), a3
                     dbra        d4, .scanline
 
                     dbra        d6, .strip

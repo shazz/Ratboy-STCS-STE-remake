@@ -216,3 +216,81 @@ Note: changes to the shared LUTs affect both effects.
 sine offset (LUT-driven, vbl_counter-anchored), then plots 20 strips. Each
 strip's Y offset is `TYPE3_ROW_Y + sine_offset + type1_inside_lut[strip]`,
 and each source scanline is written with a 1-line gap below it.
+
+---
+
+## Effect 4 — Two diagonals mirrored across a horizontal line
+
+A pair of scrollers tilted on a steep diagonal (1 line per strip), with
+row 2 rendered as the upside-down vertical mirror of row 1 across a
+horizontal symmetry line. Row 1 uses palette c1, row 2 uses palette c2 —
+the swap fires at the mirror line so the colour change visually marks
+the axis of symmetry.
+
+Geometry per strip s (0..19):
+
+* Row 1 occupies `Y = TYPE4_ROW1_TOP_Y + s ... + s + 33`
+* Row 2 (mirror): source line k → `Y = 2·MIRROR − T1 − s − k`,
+  starting at `Y = 2·MIRROR − T1 − s` and decrementing each line.
+
+With the default constants the rows touch at the right edge (strip 19,
+where row 1 bottom = mirror line) and open up like an X to the left.
+
+### Configuration
+
+| Knob                          | Where                                       | Current value | What it does                                |
+| ----------------------------- | ------------------------------------------- | ------------- | ------------------------------------------- |
+| Row 1 top at strip 0          | `src/scroller/engine.s` `TYPE4_ROW1_TOP_Y`  | 80            | top of upper diagonal at the left edge      |
+| Symmetry / mirror line        | `src/scroller/engine.s` `TYPE4_MIRROR_Y`    | 132           | horizontal axis row 2 reflects across       |
+| Slope                         | hardcoded `add.w d3, d2` / `sub.w d3, d2`   | 1 line/strip  | swap to `lsr.w #1, d3` for ½ line/strip     |
+| Palette c2 swap line          | `src/hbl.s` `RASTER_SWAP_C2_TYPE4`          | line 131      | must equal `TYPE4_MIRROR_Y - 1`             |
+| Above-mirror palette          | `font_pal_ptr1` (set in `SetPalettePointers`) | c1          | colour of row 1                             |
+| Below-mirror palette          | `font_pal_ptr2` / `font_pal_ptr3`           | c2 / c2       | colour of row 2 (ptr3=c2 prevents c3 swap)  |
+
+To **move the mirror line**, change `TYPE4_MIRROR_Y` AND
+`RASTER_SWAP_C2_TYPE4` (= mirror − 1) in lockstep.
+
+To **change slope steepness**, edit the two `add.w d3, d2 / sub.w d3, d2`
+lines in `ScrollPlotType4`. Replace `d3` with a shifted copy
+(`move.w d3, d4 / lsr.w #1, d4 / add.w d4, d2`) for fractional slopes.
+
+### Routine
+
+`ScrollPlotType4` — for each of 20 strips: computes row 1's top Y, computes
+row 2's source-line-0 dest Y (above the mirror), then plots 34 source
+lines writing forward into row 1 (`+SCREEN_LINE_BYTES` per line) and
+backward into row 2 (`-SCREEN_LINE_BYTES` per line) for the upside-down
+look.
+
+The c2 palette swap is wired through a runtime BSS slot
+(`raster_swap_c2_addr`) so this effect can move the swap to its own line
+without touching the C1/C3 swap addresses. `SetPalettePointers` writes
+`RASTER_SWAP_C2_TYPE4` for type 4 and `RASTER_SWAP_C2_DEFAULT` for
+everything else.
+
+---
+
+## Effect 5 — 4× tall vertical stretch
+
+A single centred row where each source scanline is written 4 times to
+consecutive dest lines (4× zoom). 25 of the 34 source lines are plotted to
+fit within the screen (25 × 4 = 100 dest lines). No sine, no slope, no
+clearing.
+
+> Note: this is a placeholder until "real effect 5" is decided.
+
+### Configuration
+
+| Knob               | Where                                   | Current value | What it does                              |
+| ------------------ | --------------------------------------- | ------------- | ----------------------------------------- |
+| Row Y position     | `src/scroller/engine.s` `TYPE5_ROW_Y`   | 90            | Y of the first dest line                  |
+| Source lines used  | `src/scroller/engine.s` `TYPE5_SRC_LINES` | 25         | how many of the 34 glyph lines to render  |
+
+To change the zoom factor, edit the unrolled writes inside `.scanline`
+(currently `move.l … 0/+184/+368/+552`) and the `lea SCREEN_LINE_BYTES*N(a1), a1`
+that advances dest by `N` lines.
+
+### Routine
+
+`ScrollPlotType5` — for each of 20 strips: copies 25 source lines, writing
+each one to 4 consecutive screen lines (`SCREEN_LINE_BYTES*0..3`).
