@@ -465,87 +465,73 @@ ScrollPlotType1:
                     rts
 
 ; ----------------------------------------------------------------------------
-; ScrollPlotType2 — Anti-symmetric: 2 rows moving in opposite directions
+; ScrollPlotType2 — Water reflection effect
 ;
-; Row 1 plots top-to-bottom, Row 2 plots bottom-to-top within each strip.
-; Creates a mirror/symmetric wave effect.
+; Scroller with diagonal (down from right to left) + mirrored reflection below.
+; Simplified: plot row 1 normally, then reflection with backward source read.
 ; ----------------------------------------------------------------------------
-TYPE2_ROW1_Y        equ     85                      ; row 1 base
-TYPE2_ROW2_Y        equ     150                     ; row 2 base
+TYPE2_BASE_Y        equ     78                      ; row 1 Y at right edge (after palette swap)
+TYPE2_REFLECT_GAP   equ     2                       ; small gap between row 1 and reflection
 
 ScrollPlotType2:
+                    bsr         ClearScrollerRegion
+
                     move.l      back_buffer_ptr, a5
                     lea         scroll_buffer, a2
 
-                    ; Plot 20 strips
                     moveq       #19, d6                 ; strip counter
-                    moveq       #0, d5                  ; cumulative offset for row 1
 
 .strip:
-                    ; Staircase for row 1 (same as other types)
+                    ; X offset = (19 - d6) * 8
                     move.w      #19, d0
                     sub.w       d6, d0
+                    move.w      d0, d3
+                    lsl.w       #3, d3
 
-                    cmp.w       #6, d0
-                    beq.s       .flat
-                    cmp.w       #14, d0
-                    beq.s       .flat
-                    cmp.w       #6, d0
-                    bhi.s       .check_mid
-                    addq.w      #1, d5
-                    bra.s       .do_plot
-.check_mid:
-                    cmp.w       #14, d0
-                    bhi.s       .go_down
-                    subq.w      #1, d5
-                    bra.s       .do_plot
-.go_down:
-                    addq.w      #1, d5
-.flat:
-.do_plot:
-                    ; Buffer source for this strip
-                    move.w      #19, d0
-                    sub.w       d6, d0
-                    lsl.w       #3, d0
-                    lea         0(a2,d0.w), a0
+                    ; Buffer source
+                    lea         0(a2,d3.w), a0
 
-                    ; Row 1: Y = base + offset (normal direction)
-                    move.w      #TYPE2_ROW1_Y, d2
-                    add.w       d5, d2
+                    ; Row 1 Y = base + d6/2 (left=high Y, right=low Y = down from right to left)
+                    ; Halved slope to fit reflection on screen
+                    move.w      d6, d7
+                    lsr.w       #1, d7                  ; d7 = d6/2 (0..9)
+                    move.w      #TYPE2_BASE_Y, d2
+                    add.w       d7, d2
                     mulu.w      #SCREEN_LINE_BYTES, d2
                     move.l      a5, a1
                     adda.l      d2, a1
-                    move.w      #19, d3
-                    sub.w       d6, d3
-                    lsl.w       #3, d3
                     adda.w      d3, a1
 
-                    ; Row 2: Y = base - offset (opposite direction!)
-                    move.w      #TYPE2_ROW2_Y, d2
-                    sub.w       d5, d2                  ; SUBTRACT for anti-symmetric
-                    mulu.w      #SCREEN_LINE_BYTES, d2
-                    move.l      a5, a3
-                    adda.l      d2, a3
-                    adda.w      d3, a3
-
-                    ; Copy 34 scanlines to both rows
+                    ; Plot 34 lines for row 1
+                    move.l      a0, a4                  ; save source ptr
                     move.w      #SCROLL_HEIGHT-1, d4
-.scanline:
+.row1_line:
+                    move.l      (a0), (a1)
+                    move.l      4(a0), 4(a1)
+                    lea         SCROLL_BUFFER_LINE_BYTES(a0), a0
+                    lea         SCREEN_LINE_BYTES(a1), a1
+                    dbra        d4, .row1_line
+
+                    ; Reflection: start below row 1, read source backward, write doubled
+                    ; a1 is now at row 1 bottom + 1 line, add gap
+                    lea         TYPE2_REFLECT_GAP*SCREEN_LINE_BYTES(a1), a1
+
+                    ; Point source to last line
+                    move.l      a4, a0
+                    adda.l      #(SCROLL_HEIGHT-1)*SCROLL_BUFFER_LINE_BYTES, a0
+
+                    ; Plot reflection: 34 source lines, each single with 1-line gap (interleaved)
+                    move.w      #SCROLL_HEIGHT-1, d4
+.reflect_line:
                     move.l      (a0), d0
                     move.l      4(a0), d1
-
-                    ; Row 1 (normal)
+                    ; Write single line
                     move.l      d0, (a1)
                     move.l      d1, 4(a1)
 
-                    ; Row 2 (normal too - anti-symmetry is in Y position)
-                    move.l      d0, (a3)
-                    move.l      d1, 4(a3)
-
-                    lea         SCROLL_BUFFER_LINE_BYTES(a0), a0
-                    lea         SCREEN_LINE_BYTES(a1), a1
-                    lea         SCREEN_LINE_BYTES(a3), a3
-                    dbra        d4, .scanline
+                    lea         -SCROLL_BUFFER_LINE_BYTES(a0), a0    ; backward through source
+                    lea         SCREEN_LINE_BYTES*2(a1), a1          ; 1 written + 1 gap
+                    dbra        d4, .reflect_line
 
                     dbra        d6, .strip
                     rts
@@ -882,8 +868,8 @@ ScrollPlotType7:
 ; For moving effects (Type 1, 4, 7), previous frame's pixels must be erased
 ; to avoid artifacts. Clears 116 lines × 184 bytes ≈ 21KB.
 ; ----------------------------------------------------------------------------
-CLEAR_START_Y       equ     78
-CLEAR_END_Y         equ     194
+CLEAR_START_Y       equ     70
+CLEAR_END_Y         equ     199                     ; extended to cover full reflection
 CLEAR_HEIGHT        equ     CLEAR_END_Y-CLEAR_START_Y   ; 116 lines
 
 ClearScrollerRegion:

@@ -155,6 +155,8 @@ SetPalettePointers:
 
                     cmp.w       #1, d0
                     beq.s       .single_row
+                    cmp.w       #2, d0
+                    beq.s       .single_row             ; Type 2 (reflection) uses single palette
                     cmp.w       #4, d0
                     beq.s       .single_row
                     cmp.w       #7, d0
