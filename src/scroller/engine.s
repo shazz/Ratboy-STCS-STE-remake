@@ -199,6 +199,8 @@ ScrollPlotDispatch:
                     beq         ScrollPlotType3         ; type 3 = diagonal same dir
                     cmp.w       #4, d0
                     beq         ScrollPlotType4         ; type 4 = 4× tall spread
+                    cmp.w       #5, d0
+                    beq         ScrollPlotType5         ; type 5 = converging diagonal
                     cmp.w       #7, d0
                     beq         ScrollPlotType7         ; type 7 = sine wave
                     bra         ScrollPlotType0         ; fallback
@@ -533,6 +535,87 @@ ScrollPlotType4:
                     ; Advance: source +1 line, dest +4 lines
                     lea         SCROLL_BUFFER_LINE_BYTES(a0), a0
                     lea         SCREEN_LINE_BYTES*4(a1), a1
+                    dbra        d4, .scanline
+
+                    dbra        d6, .strip
+                    rts
+
+; ----------------------------------------------------------------------------
+; ScrollPlotType5 — Converging diagonal (bulge in center)
+;
+; 2 rows that diverge toward the CENTER and converge at the edges.
+; Like original CONFO.S: rows closest at LEFT edge, bulge apart in middle,
+; come back together at RIGHT edge.
+; ----------------------------------------------------------------------------
+TYPE5_ROW1_Y        equ     95                      ; row 1 base (at edges)
+TYPE5_ROW2_Y        equ     130                     ; row 2 base (at edges) - 35 line gap
+
+ScrollPlotType5:
+                    move.l      back_buffer_ptr, a5
+                    lea         scroll_buffer, a2
+
+                    ; Plot 20 strips - diverge toward center, converge at edges
+                    moveq       #19, d6                 ; strip counter
+
+.strip:
+                    ; Strip index = 19 - d6 (0 to 19, left to right)
+                    move.w      #19, d0
+                    sub.w       d6, d0
+                    move.w      d0, d3                  ; save strip index
+
+                    ; Calculate offset based on distance from edges
+                    ; Strip 0 and 19: offset = 0 (merged)
+                    ; Strip 9-10 (center): offset = max (diverged)
+                    ; Pattern: offset = min(strip, 19-strip)
+                    move.w      #19, d5
+                    sub.w       d0, d5                  ; d5 = 19 - strip
+                    cmp.w       d0, d5
+                    bls.s       .use_d5
+                    move.w      d0, d5                  ; d5 = min(strip, 19-strip)
+.use_d5:
+                    ; d5 = 0,1,2...9,9...2,1,0 across strips (peak at center)
+                    ; Row 1 goes UP by d5, Row 2 goes DOWN by d5
+                    move.w      d5, d7                  ; d7 = same offset for row 2
+
+.do_plot:
+                    ; Buffer source for this strip
+                    move.w      d3, d0
+                    lsl.w       #3, d0                  ; * 8 bytes per pword
+                    lea         0(a2,d0.w), a0
+
+                    ; Row 1: Y = base - offset (goes UP toward center)
+                    move.w      #TYPE5_ROW1_Y, d2
+                    sub.w       d5, d2
+                    mulu.w      #SCREEN_LINE_BYTES, d2
+                    move.l      a5, a1
+                    adda.l      d2, a1
+                    adda.w      d0, a1
+
+                    ; Row 2: Y = base + offset (goes DOWN toward center)
+                    move.w      #TYPE5_ROW2_Y, d2
+                    add.w       d7, d2
+                    mulu.w      #SCREEN_LINE_BYTES, d2
+                    move.l      a5, a3
+                    adda.l      d2, a3
+                    adda.w      d0, a3
+
+                    ; Copy 34 scanlines to both rows
+                    move.w      #SCROLL_HEIGHT-1, d4
+.scanline:
+                    move.l      (a0), d1
+                    move.l      4(a0), d2
+
+                    ; Row 1
+                    move.l      d1, (a1)
+                    move.l      d2, 4(a1)
+
+                    ; Row 2
+                    move.l      d1, (a3)
+                    move.l      d2, 4(a3)
+
+                    lea         SCROLL_BUFFER_LINE_BYTES(a0), a0
+                    lea         SCREEN_LINE_BYTES(a1), a1
+                    lea         SCREEN_LINE_BYTES(a3), a3
                     dbra        d4, .scanline
 
                     dbra        d6, .strip
