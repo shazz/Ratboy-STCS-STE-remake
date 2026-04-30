@@ -72,50 +72,47 @@ ArmTimerBRaster:
 
 ; ----------------------------------------------------------------------------
 ; TimerBHandler — fires on each Shifter DE pulse (every visible scanline).
-; MFP event-count mode auto-reloads TBDR from its latch, so no re-arm is
-; needed in the hot path — critically, this keeps the ISR short enough to
-; co-exist with a cooperative-mode blitter (the blitter re-arbitrates the
-; bus every 64 cycles; a re-arm sequence would get stretched and corrupt
-; MFP state — see blitter_faq.txt §d and the earlier failed attempt).
 ;
-; At the swap-trigger entry, skips the color 0 write and installs the font
-; palette instead (colors 1..15).
+; SESSION 4 FIX (2026-04-29): Skip palette write for scanlines 107-111.
+; The move.w to SHIFTER_PALETTE during those specific scanlines causes a
+; bus collision with Shifter DMA fetch, shifting row 1's last 5 lines by
+; 32 pixels. Skipping the write creates a 5-line "freeze" in the gradient
+; (imperceptible since it's in the red-to-dark transition area).
+;
+; Also handles font palette swap at PALETTE_SWAP_ENTRY (line 77).
 ; ----------------------------------------------------------------------------
+RASTER_SKIP_START   equ     raster_table+107*2      ; scanline 107
+RASTER_SKIP_END     equ     raster_table+112*2      ; scanline 112 (exclusive)
+RASTER_SWAP_ADDR    equ     raster_table+PALETTE_SWAP_ENTRY*2
+
 TimerBHandler:
                     move.l      a0, -(sp)
                     move.l      raster_ptr, a0
-                    cmp.l       #raster_swap_font, a0
-                    beq         .install_font
 
-                    ; Normal: write color 0 from raster table, advance.
-                    move.w      (a0)+, SHIFTER_PALETTE
-                    move.l      a0, raster_ptr
-                    bclr.b      #0, MFP_ISRA
-                    move.l      (sp)+, a0
-                    rte
+                    ; Check for font palette swap at line 77
+                    cmpa.l      #RASTER_SWAP_ADDR, a0
+                    bne.s       .check_skip
+                    ; Install font palette (colors 1-15)
+                    movem.l     d0-d7, -(sp)
+                    movem.l     font_palette_c1+2, d0-d6
+                    movem.l     d0-d6, SHIFTER_PALETTE+2
+                    movem.l     (sp)+, d0-d7
 
-.install_font:
-                    ; Consume gradient entry (we own color 0 for this scanline).
+.check_skip:
+                    ; Skip palette write for scanlines 107-111 to avoid
+                    ; Shifter bus collision that causes row-1 glitch.
+                    cmpa.l      #RASTER_SKIP_START, a0
+                    blo.s       .do_write
+                    cmpa.l      #RASTER_SKIP_END, a0
+                    bhs.s       .do_write
                     addq.l      #2, a0
+                    bra.s       .done
+
+.do_write:
+                    move.w      (a0)+, SHIFTER_PALETTE
+
+.done:
                     move.l      a0, raster_ptr
-
-                    ; 8 long writes instead of 15 word writes — ~30% fewer
-                    ; cycles. Overwrites color 0 with font_palette_c1[0] for
-                    ; THIS scanline only; the next gradient ISR (line 78)
-                    ; restores gradient color 0. The font palette's color 0
-                    ; is near-black so the 1-line artifact is invisible.
-                    move.l      a1, -(sp)
-                    lea         font_palette_c1, a1
-                    move.l      (a1), SHIFTER_PALETTE
-                    move.l      4(a1), SHIFTER_PALETTE+4
-                    move.l      8(a1), SHIFTER_PALETTE+8
-                    move.l      12(a1), SHIFTER_PALETTE+12
-                    move.l      16(a1), SHIFTER_PALETTE+16
-                    move.l      20(a1), SHIFTER_PALETTE+20
-                    move.l      24(a1), SHIFTER_PALETTE+24
-                    move.l      28(a1), SHIFTER_PALETTE+28
-                    move.l      (sp)+, a1
-
                     bclr.b      #0, MFP_ISRA
                     move.l      (sp)+, a0
                     rte

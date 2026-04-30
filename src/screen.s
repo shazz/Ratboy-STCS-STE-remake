@@ -1,19 +1,20 @@
 ; ----------------------------------------------------------------------------
-; screen.s — Screen buffer ownership, resolution switch, palette, blit primitives
+; screen.s — Double-buffered screen memory + boot-time setup
 ; ----------------------------------------------------------------------------
-; InitScreen is the boot-time setup:
-;   1. Switch to low-res (320x200x16) via XBIOS Setscreen (mode only; bases
-;      stay put while TOS does its thing).
-;   2. Compute a 256-byte-aligned base inside our BSS buffer. Original ST
-;      requires this alignment; STE tolerates any byte, but staying
-;      ST-compatible is harmless and keeps the code portable.
-;   3. Point the Shifter at our buffer by writing $FF8201/$FF8203/$FF820D.
-;   4. Zero the buffer.
-;   5. Install the top logo's palette (16 words via MOVEM).
-;   6. Blit the top-logo bitmap into the first N scanlines of the buffer.
+; Two screen buffers (37 KB each, 256-aligned), both pre-painted with the
+; static LOGO at boot. Each VBL the front/back pointers swap and the new
+; front address is written to the Shifter base registers; the scroller plot
+; writes its rows into whichever buffer is currently "back" (i.e. NOT being
+; displayed). This eliminates the plot-vs-Shifter race that the single-buffer
+; build hit at row 1's last few scanlines.
 ;
-; Exported label: screen_base — the aligned buffer address, saved for other
-; modules (scroller, HBL handler) that need to compute line offsets.
+; Memory layout in BSS:
+;   screen_buffer_a_raw  — raw, 36800 + 256 bytes for alignment slack
+;   screen_buffer_b_raw  — raw, same
+;   screen_buffer_a      — 256-byte-aligned pointer into _a_raw
+;   screen_buffer_b      — 256-byte-aligned pointer into _b_raw
+;   front_buffer_ptr     — currently-displayed buffer (Shifter reading this)
+;   back_buffer_ptr      — currently-rendering buffer (CPU plot writing here)
 ; ----------------------------------------------------------------------------
 
 InitScreen:
@@ -26,65 +27,89 @@ InitScreen:
                     lea         12(sp), sp
 
                     ; ---------- 2. STE LINEWID for off-screen pipeline ----------
-                    ; LINEWID=12 adds 12 extra words/line (= 3 pwords = 48 px
-                    ; of off-screen buffer on the right). The CPU 8-bit shift
-                    ; uses this as the scroller's lookahead pipeline. HSCROLL
-                    ; stays at 0 — we're not using hardware sub-word scroll.
                     move.b      #SCREEN_LINEWID, VIDEO_LINEWID
                     clr.b       VIDEO_HSCROLL
 
-                    ; ---------- 3. align our buffer to 256 bytes ----------
-                    lea         screen_buffer_raw, a0
+                    ; ---------- 3. align both buffers to 256 bytes ----------
+                    lea         screen_buffer_a_raw, a0
                     move.l      a0, d0
                     add.l       #SCREEN_ALIGN-1, d0
-                    clr.b       d0                      ; zero low byte → round down to boundary
-                    move.l      d0, screen_base         ; publish for other modules
+                    clr.b       d0
+                    move.l      d0, screen_buffer_a
 
-                    ; ---------- 4. point Shifter at our buffer ----------
-                    move.l      d0, d1
-                    move.b      d1, SCREEN_BASE_LOW     ; STE: bits 7-0
+                    lea         screen_buffer_b_raw, a0
+                    move.l      a0, d0
+                    add.l       #SCREEN_ALIGN-1, d0
+                    clr.b       d0
+                    move.l      d0, screen_buffer_b
+
+                    ; ---------- 4. init front/back pointers ----------
+                    move.l      screen_buffer_a, front_buffer_ptr
+                    move.l      screen_buffer_b, back_buffer_ptr
+
+                    ; ---------- 5. point Shifter at front (= buffer A) ----------
+                    move.l      front_buffer_ptr, d1
+                    move.b      d1, SCREEN_BASE_LOW
                     lsr.l       #8, d1
-                    move.b      d1, SCREEN_BASE_MID     ; bits 15-8
+                    move.b      d1, SCREEN_BASE_MID
                     lsr.l       #8, d1
-                    move.b      d1, SCREEN_BASE_HIGH    ; bits 23-16
+                    move.b      d1, SCREEN_BASE_HIGH
 
-                    ; ---------- 5. zero the whole buffer ----------
-                    ; 36800 bytes / 4 = 9200 longs. d0 = aligned base.
-                    move.l      d0, a0
-                    move.w      #(SCREEN_BYTES/4)-1, d1
-                    moveq       #0, d2
-.clear:
-                    move.l      d2, (a0)+
-                    dbra        d1, .clear
+                    ; ---------- 6. zero both buffers ----------
+                    move.l      screen_buffer_a, a0
+                    bsr         .clear_one
+                    move.l      screen_buffer_b, a0
+                    bsr         .clear_one
 
-                    ; ---------- 6. install logo palette ----------
-                    ; 16 words = 8 longs via MOVEM. Fastest full-palette write.
+                    ; ---------- 7. install logo palette ----------
                     movem.l     top_logo_palette, d0-d7
                     movem.l     d0-d7, SHIFTER_PALETTE
 
-                    ; ---------- 7. blit logo into top of buffer ----------
-                    ; Logo is 160 bytes × 74 lines (no LINEWID in source).
-                    ; Screen line is 184 bytes; write 160 then skip 24.
-                    move.l      screen_base, a1
+                    ; ---------- 8. blit logo into BOTH buffers ----------
+                    ; The logo is static for the entire demo, so we paint
+                    ; it once into each buffer and never touch it again.
+                    ; The scroller writes only into the row regions
+                    ; (SCROLL_Y_1..3), well below the logo.
+                    move.l      screen_buffer_a, a1
+                    bsr         .paint_logo
+                    move.l      screen_buffer_b, a1
+                    bsr         .paint_logo
+
+                    rts
+
+; ---------- helpers ----------
+.clear_one:
+                    ; a0 = buffer to clear (SCREEN_BYTES bytes)
+                    move.w      #(SCREEN_BYTES/4)-1, d1
+                    moveq       #0, d2
+.clear_loop:
+                    move.l      d2, (a0)+
+                    dbra        d1, .clear_loop
+                    rts
+
+.paint_logo:
+                    ; a1 = destination buffer base
                     lea         top_logo_bitmap, a0
-                    move.w      #TOP_LOGO_HEIGHT-1, d0          ; outer: 74 lines
+                    move.w      #TOP_LOGO_HEIGHT-1, d0          ; 74 lines
 .blit_line:
                     move.w      #(TOP_LOGO_LINE_B/4)-1, d1      ; 40 longs/line
 .blit_word:
                     move.l      (a0)+, (a1)+
                     dbra        d1, .blit_word
-                    lea         (SCREEN_EXTRA_WORDS*2)(a1), a1  ; skip 24-byte pad
+                    lea         (SCREEN_EXTRA_WORDS*2)(a1), a1  ; skip 24-byte LINEWID pad
                     dbra        d0, .blit_line
                     rts
 
 ; ----------------------------------------------------------------------------
-; BSS — screen buffer + aligned base pointer
-; The raw buffer has SCREEN_ALIGN extra bytes so the runtime alignment
-; computation always has room to round up.
+; BSS — two raw buffers + two aligned pointers + front/back swap pointers.
 ; ----------------------------------------------------------------------------
                     section     BSS
 
-screen_buffer_raw:  ds.b        SCREEN_BYTES+SCREEN_ALIGN
-screen_base:        ds.l        1
+screen_buffer_a_raw:  ds.b      SCREEN_BYTES+SCREEN_ALIGN
+screen_buffer_b_raw:  ds.b      SCREEN_BYTES+SCREEN_ALIGN
+screen_buffer_a:      ds.l      1
+screen_buffer_b:      ds.l      1
+front_buffer_ptr:     ds.l      1
+back_buffer_ptr:      ds.l      1
 
                     section     TEXT

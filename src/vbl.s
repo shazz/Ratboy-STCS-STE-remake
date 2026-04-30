@@ -61,6 +61,10 @@ RemoveVBL:
 VBLHandler:
                     movem.l     d0-a6, -(sp)
                     addq.w      #1, vbl_counter
+
+                    ; Buffer swap moved to MainLoop (SwapBuffers) — we just
+                    ; reinstall palette and reset raster_ptr here.
+
                     ; Reinstall LOGO palette for the new frame's logo area.
                     movem.l     top_logo_palette, d0-d7
                     movem.l     d0-d7, SHIFTER_PALETTE
@@ -71,14 +75,31 @@ VBLHandler:
                     ; left running by InstallHBL — see hbl.s). Must reset
                     ; ptr BEFORE the first visible scanline of next frame.
                     bsr         ArmTimerBRaster
-                    ; Heavy scroller work runs HERE in invisible time, in
-                    ; HOG mode. ~103 sl of work fits in the 113 sl post-VBL
-                    ; invisible window. Light cooperative work (rows 2/3)
-                    ; runs in MainLoop after WAIT_VBL.
-                    ifne        SCROLLER_ENABLED
-                    bsr         ScrollerStepVblank
-                    endif
+
                     movem.l     (sp)+, d0-a6
+                    rts
+
+; ----------------------------------------------------------------------------
+; SwapBuffers — swap front/back pointers and write SCREEN_BASE.
+; Called from MainLoop AFTER scroller work is done (like original CONFO.S).
+; This makes the just-rendered back buffer become the new front.
+; ----------------------------------------------------------------------------
+SwapBuffers:
+                    move.l      front_buffer_ptr, a0            ; old front
+                    move.l      back_buffer_ptr, a1              ; old back (= new front)
+                    move.l      a1, front_buffer_ptr
+                    move.l      a0, back_buffer_ptr
+
+                    ; Write new front to SCREEN_BASE
+                    move.l      a1, d0
+                    lsr.l       #8, d0
+                    lsr.l       #8, d0
+                    move.b      d0, SCREEN_BASE_HIGH
+                    move.l      a1, d0
+                    lsr.l       #8, d0
+                    move.b      d0, SCREEN_BASE_MID
+                    move.l      a1, d0
+                    move.b      d0, SCREEN_BASE_LOW
                     rts
 
 ; ----------------------------------------------------------------------------

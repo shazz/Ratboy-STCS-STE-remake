@@ -62,10 +62,15 @@ VRAM_PTR            equ     $44E                    ; logical screen base
 ; Feature toggles (for diagnostics)
 ; ----------------------------------------------------------------------------
 ; 1 = music enabled; 0 = skip MusicSndhPlay calls (isolate blitter etc.)
-MUSIC_ENABLED       equ     0
+MUSIC_ENABLED       equ     1
 ; 1 = scroller enabled; 0 = skip ScrollerInit + ScrollerStep (no blitter
 ; activity at all — use to verify Timer-B rasters in isolation).
 SCROLLER_ENABLED    equ     1
+; 1 = raster (Timer-B per-scanline color 0 + line-77 font-palette swap)
+; enabled; 0 = skip InstallHBL/RemoveHBL entirely. With RASTER_ENABLED=0
+; the screen displays in LOGO palette only, no gradient — useful to test
+; whether per-scanline ISR activity is interacting with the scroller.
+RASTER_ENABLED      equ     1
 
 ; ----------------------------------------------------------------------------
 ; Trap numbers
@@ -124,12 +129,26 @@ RES_HIGH            equ     2                       ; 640x400x2
 ; HBL installs the font palette at PALETTE_SWAP_LINE so colors 1..15 hold
 ; font_palette_c1 from there through the bottom of the last scroll row.
 ; All three rows display the same content (one scroll_buffer, three copies).
-SCROLL_Y            equ     78                      ; top row (backward-compat alias)
-SCROLL_Y_1          equ     78                      ; top row
-SCROLL_Y_2          equ     119                     ; middle row
-SCROLL_Y_3          equ     160                     ; bottom row
+; Scroller geometry — original positions
+SCROLL_Y            equ     78                      ; top row
+SCROLL_Y_1          equ     78                      ; row 1: Y=78-111
+SCROLL_Y_2          equ     119                     ; row 2: Y=119-152
+SCROLL_Y_3          equ     160                     ; row 3: Y=160-193
 SCROLL_HEIGHT       equ     34                      ; glyph height
-SCROLL_RIGHT_PWORD  equ     SCREEN_TOTAL_PWORDS-1   ; 22 — rightmost pword in scroll_buffer (off-screen staging)
+SCROLL_RIGHT_PWORD  equ     SCREEN_TOTAL_PWORDS-1   ; 22 — legacy in-place pword (kept for compat)
+
+; Off-screen scroll_buffer (Option F architecture, session 3):
+;   21 pwords wide = 20 visible + 1 staging on the right.
+;   Render new pword each VBL into pword 20, HOG-shift buffer left,
+;   HOG-copy buffer[0..19] to screen rows 1/2/3. Total HOG ≈ 183 sl,
+;   straddling the 113 sl invisible window plus first 70 sl of the
+;   logo region. Timer-B raster_ptr is fixed up after HOG to skip the
+;   missed gradient lines.
+SCROLL_BUFFER_PWORDS      equ 21                                  ; 20 visible + 1 staging
+SCROLL_BUFFER_VIS_PWORDS  equ 20                                  ; visible portion copied to screen
+SCROLL_BUFFER_LINE_BYTES  equ SCROLL_BUFFER_PWORDS*PWORD_BYTES    ; 168
+SCROLL_BUFFER_BYTES       equ SCROLL_BUFFER_LINE_BYTES*SCROLL_HEIGHT   ; 5712
+SCROLL_BUFFER_RIGHT_OFFS  equ (SCROLL_BUFFER_PWORDS-1)*PWORD_BYTES ; pword 20 byte offset = 160
 
 ; ----------------------------------------------------------------------------
 ; Blitter registers (STE, base $FF8A00)
@@ -172,7 +191,7 @@ FONT_FIRST_ASCII    equ     32                      ; glyph 0 = space
 ; maps directly to visible scanline N. Target: line 77 — just before
 ; SCROLL_Y_1 (78), in the gap between logo bottom (~line 73) and the
 ; top scroll row.
-PALETTE_SWAP_ENTRY  equ     77
+PALETTE_SWAP_ENTRY  equ     77                      ; line 77 = just before SCROLL_Y_1 (78)
 
 ; ----------------------------------------------------------------------------
 ; Colors (ST-compatible palette values — $0rgb with 3 bits per channel,

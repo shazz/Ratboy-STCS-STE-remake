@@ -49,7 +49,9 @@ Main:
                     endif
                     bsr         DisableMouse            ; stop IKBD mouse packets — they shake rasters
                     bsr         InstallVBL              ; claim a vbl-queue slot
+                    ifne        RASTER_ENABLED
                     bsr         InstallHBL              ; hook $68 for the raster gradient
+                    endif
                     ifne        MUSIC_ENABLED
                     bsr         MusicSndhInit           ; song 1 loaded; VBL handler will tick it
                     endif
@@ -68,7 +70,9 @@ Main:
                     endif
 
                     move.w      #$2700, sr              ; NOW mask all; remove handlers
+                    ifne        RASTER_ENABLED
                     bsr         RemoveHBL
+                    endif
                     bsr         RemoveVBL
                     bsr         EnableMouse             ; hand mouse back to TOS
                     bsr         RestoreState            ; hand TOS back its palette/res/base
@@ -86,11 +90,12 @@ Main:
 MainLoop:
 .tick:
                     WAIT_VBL                            ; block one frame
+                    ; Scroller work AFTER VBL, BEFORE swap (like original):
+                    ; Original order: work → swap → vsync
+                    ; Our order: vsync (WAIT_VBL) → work → swap
                     ifne        SCROLLER_ENABLED
-                    bsr         ScrollerStepVisible     ; rows 2/3 cooperative copy
-                                                        ; (heavy work — render + shift
-                                                        ;  + row 1 — already done in
-                                                        ;  VBL handler in HOG mode)
+                    bsr         ScrollerStepVblank      ; render + shift + plot to back buffer
+                    bsr         SwapBuffers             ; NOW swap (makes our work visible next frame)
                     endif
                     bsr         CheckEsc                ; non-blocking keyboard poll
                     tst.w       exit_flag
