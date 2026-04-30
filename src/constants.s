@@ -193,6 +193,11 @@ FONT_FIRST_ASCII    equ     32                      ; glyph 0 = space
 ; top scroll row.
 PALETTE_SWAP_ENTRY  equ     77                      ; line 77 = just before SCROLL_Y_1 (78)
 
+; Scroll effect type (change to test different effects):
+;   0 = 3 fixed rows (default)
+;   7 = sine wave (single row with vertical wobble)
+SCROLL_EFFECT_DEFAULT equ   7                       ; TEST: sine wave effect
+
 ; ----------------------------------------------------------------------------
 ; Colors (ST-compatible palette values — $0rgb with 3 bits per channel,
 ; STE extra bit lives in bit 3 of each nibble. These values work on both.)

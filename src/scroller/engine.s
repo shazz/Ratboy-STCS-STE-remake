@@ -37,12 +37,18 @@
 ; ----------------------------------------------------------------------------
 
 ; ----------------------------------------------------------------------------
-; ScrollerInit — clear scroll_buffer, reset cursor + word state.
+; ScrollerInit — clear scroll_buffer, reset cursor + word state + effect.
 ; ----------------------------------------------------------------------------
 ScrollerInit:
                     clr.w       scroll_word_in_char
                     lea         scrolltext_S1, a0
                     move.l      a0, scroll_text_cursor
+
+                    ; Initialize effect state
+                    move.w      #SCROLL_EFFECT_DEFAULT, scroll_effect_type
+                    clr.w       sine_frame_count
+                    move.w      #1, sine_direction      ; start moving down
+                    clr.w       sine_offset
 
                     lea         scroll_buffer, a0
                     move.w      #(SCROLL_BUFFER_BYTES/4)-1, d0
@@ -53,15 +59,14 @@ ScrollerInit:
                     rts
 
 ; ----------------------------------------------------------------------------
-; ScrollerStepVblank — full per-VBL pipeline. Runs in VBL handler.
+; ScrollerStepVblank — full per-VBL pipeline. Called from MainLoop.
 ;
-; Reverted to integrated shift+plot (~135 sl pure) — the split version made
-; the glitch worse because total work grew from 135 to 162 sl, widening the
-; race window. The split routines are kept below for reference.
+; Pipeline: render new pword → shift buffer left → plot via current effect.
 ; ----------------------------------------------------------------------------
 ScrollerStepVblank:
                     bsr         ScrollRenderNextPword
-                    bsr         ScrollShiftAndPlot
+                    bsr         ScrollShift
+                    bsr         ScrollPlotDispatch
                     rts
 
 ; ----------------------------------------------------------------------------
@@ -172,45 +177,31 @@ ScrollPlot:
                     dbra        d7, .line
                     rts
 
+; ============================================================================
+; EFFECT DISPATCHER — routes to the current effect's plot routine
+; ============================================================================
+; scroll_effect_type selects which visual effect to use:
+;   0 = 3 fixed rows (default, current behavior)
+;   7 = sine wave (single row with vertical wobble)
+;
+; To test effects: change scroll_effect_type in BSS or add runtime switching.
+; ============================================================================
+
+ScrollPlotDispatch:
+                    move.w      scroll_effect_type, d0
+                    beq         ScrollPlotType0         ; type 0 = 3 fixed rows
+                    cmp.w       #7, d0
+                    beq         ScrollPlotType7         ; type 7 = sine wave
+                    ; Default fallback to type 0
+                    bra         ScrollPlotType0
+
 ; ----------------------------------------------------------------------------
-; ScrollShiftAndPlot — integrated CPU shift + 3-way fan-out plot.
-; (Kept for reference. Currently unused; ScrollerStepVblank calls the split
-; ScrollShift + ScrollPlot pair.)
-;
-; Per scanline: read 8 longs (16 words = 2 pwords) from buffer[pword 1..]
-; via movem.l with auto-increment, then write the same 8 longs to four
-; destinations (buffer-shift dst, screen row 1, row 2, row 3). 5 such
-; chunks cover the 80 words / 20 pwords / 160 bytes of the visible row
-; width. After 34 scanlines the entire row is shifted-in-buffer AND
-; splatted to all three on-screen rows.
-;
-; Register allocation:
-;   a0 = src   (scroll_buffer + pword 1, auto-incremented by movem read)
-;   a1 = dst-shift (scroll_buffer + pword 0; bumped manually)
-;   a2 = screen row 1 dst (bumped manually)
-;   a3 = screen row 2 dst
-;   a4 = screen row 3 dst
-;   a5 = scratch (used during pointer setup)
-;   a6 = movem payload (8th long of each transfer)
-;   d0-d6 = movem payload (longs 1..7)
-;   d7 = scanline loop counter (kept out of the movem range)
-;
-; The choice of d0-d6/a6 instead of d0-d7 lets us use d7 for `dbra` without
-; needing stack juggling each iteration. Both register groups give the same
-; movem.l timing (8 longs = 76 cy read / 72 cy write).
-;
-; Per-scanline cost: 5 × (76 + 4×(72+8)) + 5×8 + 14 ≈ 2034 cy. × 34 lines
-; ≈ 69 Kcy ≈ 135 sl pure rate. With Shifter bus contention (~30%) and one
-; ~150-cy Timer-B ISR per visible scanline of work, expect ~165-175 sl
-; wallclock. Plot starts after render (sl ~22) so ends around sl ~190 =
-; visible line ~78. Plot writes scanlines in order, so row 1 line 0 (=
-; screen line 78) is written first, well before Shifter fetches it at
-; sl 191. Margin to row 1's last line (sl 224) is ~40 sl — comfortable.
+; ScrollPlotType0 — 3-row fixed plot (original behavior)
+; Copies buffer[0..19] to all 3 screen rows at fixed Y positions.
 ; ----------------------------------------------------------------------------
-ScrollShiftAndPlot:
-                    lea         scroll_buffer+PWORD_BYTES, a0   ; src = pword 1
-                    lea         scroll_buffer, a1                ; dst (shift) = pword 0
-                    move.l      back_buffer_ptr, a5              ; off-display buffer
+ScrollPlotType0:
+                    lea         scroll_buffer, a0
+                    move.l      back_buffer_ptr, a5
                     lea         (SCROLL_Y_1*SCREEN_LINE_BYTES)(a5), a2
                     lea         (SCROLL_Y_2*SCREEN_LINE_BYTES)(a5), a3
                     lea         (SCROLL_Y_3*SCREEN_LINE_BYTES)(a5), a4
@@ -219,8 +210,6 @@ ScrollShiftAndPlot:
 .line:
                     rept        5
                     movem.l     (a0)+, d0-d6/a6
-                    movem.l     d0-d6/a6, (a1)
-                    lea         32(a1), a1
                     movem.l     d0-d6/a6, (a2)
                     lea         32(a2), a2
                     movem.l     d0-d6/a6, (a3)
@@ -228,14 +217,112 @@ ScrollShiftAndPlot:
                     movem.l     d0-d6/a6, (a4)
                     lea         32(a4), a4
                     endr
-
-                    addq.l      #8, a0
-                    addq.l      #8, a1
-                    lea         24(a2), a2
+                    addq.l      #8, a0                  ; buffer stride = 168, read 160
+                    lea         24(a2), a2              ; screen stride = 184, wrote 160
                     lea         24(a3), a3
                     lea         24(a4), a4
-
                     dbra        d7, .line
+                    rts
+
+; ----------------------------------------------------------------------------
+; ScrollPlotType7 — Sine wave scroller (matches original CONFO.S type7)
+;
+; Uses a staircase Y-offset pattern across 20 strips (like original):
+;   Strips 0-5:   go DOWN 2 lines per strip
+;   Strip 6:      flat
+;   Strips 7-13:  go UP 2 lines per strip
+;   Strip 14:     flat
+;   Strips 15-19: go DOWN 2 lines per strip
+;
+; Plus a slow vertical bob (sine_offset) that oscillates every 49 frames.
+; ----------------------------------------------------------------------------
+ScrollPlotType7:
+                    ; Update slow vertical bob every 49 frames
+                    addq.w      #1, sine_frame_count
+                    cmp.w       #49, sine_frame_count
+                    blt.s       .no_bob_change
+                    clr.w       sine_frame_count
+                    neg.w       sine_direction          ; flip direction
+.no_bob_change:
+                    move.w      sine_direction, d0
+                    add.w       d0, sine_offset         ; bob up or down 1 line/frame
+
+                    ; Clamp sine_offset to reasonable range (-20 to +20)
+                    cmp.w       #20, sine_offset
+                    ble.s       .not_too_high
+                    move.w      #20, sine_offset
+.not_too_high:
+                    cmp.w       #-20, sine_offset
+                    bge.s       .not_too_low
+                    move.w      #-20, sine_offset
+.not_too_low:
+
+                    move.l      back_buffer_ptr, a5
+                    lea         scroll_buffer, a2
+
+                    ; Base Y position + current bob offset
+                    move.w      #SCROLL_Y_2, d3
+                    add.w       sine_offset, d3         ; d3 = base Y for this frame
+
+                    ; Plot 20 strips, accumulating Y offset per strip
+                    moveq       #0, d5                  ; cumulative Y offset (in lines)
+                    moveq       #19, d6                 ; strip counter (19 down to 0)
+
+.strip:
+                    ; Calculate staircase offset based on strip number
+                    ; Strip index = 19 - d6 (so 0,1,2...19)
+                    move.w      #19, d0
+                    sub.w       d6, d0                  ; d0 = strip index 0-19
+
+                    ; Staircase pattern (matching original type7):
+                    cmp.w       #6, d0
+                    beq.s       .flat1
+                    cmp.w       #14, d0
+                    beq.s       .flat2
+                    cmp.w       #6, d0
+                    bhi.s       .check_mid
+                    ; Strips 0-5: go down (1 line per strip = gentler wave)
+                    addq.w      #1, d5
+                    bra.s       .do_plot
+.check_mid:
+                    cmp.w       #14, d0
+                    bhi.s       .go_down
+                    ; Strips 7-13: go up
+                    subq.w      #1, d5
+                    bra.s       .do_plot
+.go_down:
+                    ; Strips 15-19: go down
+                    addq.w      #1, d5
+.flat1:
+.flat2:
+                    ; Strips 6 and 14: stay flat (no Y change)
+.do_plot:
+                    ; Calculate final Y = base + cumulative offset
+                    move.w      d3, d2
+                    add.w       d5, d2
+                    mulu.w      #SCREEN_LINE_BYTES, d2  ; d2 = Y byte offset
+
+                    ; Buffer source for this strip (pword column)
+                    move.w      #19, d0
+                    sub.w       d6, d0
+                    lsl.w       #3, d0                  ; * 8 bytes
+                    lea         0(a2,d0.w), a0          ; a0 = buffer column
+
+                    ; Screen dest
+                    move.l      a5, a1
+                    adda.l      d2, a1
+                    adda.w      d0, a1                  ; a1 = screen column
+
+                    ; Copy 34 scanlines of this pword column
+                    move.w      #SCROLL_HEIGHT-1, d4
+.scanline:
+                    move.l      (a0), (a1)
+                    move.l      4(a0), 4(a1)
+                    lea         SCROLL_BUFFER_LINE_BYTES(a0), a0
+                    lea         SCREEN_LINE_BYTES(a1), a1
+                    dbra        d4, .scanline
+
+                    dbra        d6, .strip
                     rts
 
 ; ----------------------------------------------------------------------------
@@ -249,5 +336,10 @@ scroll_buffer:        ds.b      SCROLL_BUFFER_BYTES
 scroll_word_in_char:  ds.w      1
 scroll_text_cursor:   ds.l      1
 scroll_glyph_ptr:     ds.l      1
+
+scroll_effect_type:   ds.w      1       ; 0=3-row fixed, 7=sine wave
+sine_frame_count:     ds.w      1       ; frames since last bob direction change
+sine_direction:       ds.w      1       ; +1 or -1 for bob direction
+sine_offset:          ds.w      1       ; current vertical bob offset (scanlines)
 
                     section     TEXT
