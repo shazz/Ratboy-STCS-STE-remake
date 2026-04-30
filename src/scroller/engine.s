@@ -46,6 +46,8 @@ ScrollerInit:
 
                     ; Initialize effect state
                     move.w      #SCROLL_EFFECT_DEFAULT, scroll_effect_type
+                    move.w      #SCROLL_EFFECT_DEFAULT, d0
+                    bsr         SetPalettePointers      ; set palette ptrs based on effect
                     clr.w       sine_frame_count
                     move.w      #1, sine_direction      ; start moving down
                     clr.w       sine_offset
@@ -370,6 +372,9 @@ ScrollPlotType0:
 TYPE1_ROW_Y         equ     100                     ; centered, leaves room for 68-line height
 
 ScrollPlotType1:
+                    ; Clear scroller region to avoid artifacts from sine movement
+                    bsr         ClearScrollerRegion
+
                     ; Update slow vertical bob (shared with Type7)
                     addq.w      #1, sine_frame_count
                     cmp.w       #49, sine_frame_count
@@ -869,6 +874,36 @@ ScrollPlotType7:
                     dbra        d4, .scanline
 
                     dbra        d6, .strip
+                    rts
+
+; ----------------------------------------------------------------------------
+; ClearScrollerRegion — Clear screen area used by sine effects (lines 78-193)
+;
+; For moving effects (Type 1, 4, 7), previous frame's pixels must be erased
+; to avoid artifacts. Clears 116 lines × 184 bytes ≈ 21KB.
+; ----------------------------------------------------------------------------
+CLEAR_START_Y       equ     78
+CLEAR_END_Y         equ     194
+CLEAR_HEIGHT        equ     CLEAR_END_Y-CLEAR_START_Y   ; 116 lines
+
+ClearScrollerRegion:
+                    move.l      back_buffer_ptr, a0
+                    ; Start at line 78
+                    adda.l      #CLEAR_START_Y*SCREEN_LINE_BYTES, a0
+                    move.w      #CLEAR_HEIGHT-1, d7
+                    moveq       #0, d0
+.clear_line:
+                    ; Clear 184 bytes = 46 longwords per line
+                    rept        11
+                    move.l      d0, (a0)+
+                    move.l      d0, (a0)+
+                    move.l      d0, (a0)+
+                    move.l      d0, (a0)+
+                    endr
+                    move.l      d0, (a0)+
+                    move.l      d0, (a0)+
+                    ; 11*4 + 2 = 46 longwords = 184 bytes
+                    dbra        d7, .clear_line
                     rts
 
 ; ----------------------------------------------------------------------------

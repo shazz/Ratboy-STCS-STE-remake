@@ -101,24 +101,27 @@ TimerBHandler:
                     bra.s       .check_skip
 
 .swap_c1:
-                    movem.l     d0-d7, -(sp)
-                    movem.l     font_palette_c1+2, d0-d6
+                    movem.l     d0-d7/a1, -(sp)
+                    move.l      font_pal_ptr1, a1
+                    movem.l     2(a1), d0-d6
                     movem.l     d0-d6, SHIFTER_PALETTE+2
-                    movem.l     (sp)+, d0-d7
+                    movem.l     (sp)+, d0-d7/a1
                     bra.s       .check_skip
 
 .swap_c2:
-                    movem.l     d0-d7, -(sp)
-                    movem.l     font_palette_c2+2, d0-d6
+                    movem.l     d0-d7/a1, -(sp)
+                    move.l      font_pal_ptr2, a1
+                    movem.l     2(a1), d0-d6
                     movem.l     d0-d6, SHIFTER_PALETTE+2
-                    movem.l     (sp)+, d0-d7
+                    movem.l     (sp)+, d0-d7/a1
                     bra.s       .check_skip
 
 .swap_c3:
-                    movem.l     d0-d7, -(sp)
-                    movem.l     font_palette_c3+2, d0-d6
+                    movem.l     d0-d7/a1, -(sp)
+                    move.l      font_pal_ptr3, a1
+                    movem.l     2(a1), d0-d6
                     movem.l     d0-d6, SHIFTER_PALETTE+2
-                    movem.l     (sp)+, d0-d7
+                    movem.l     (sp)+, d0-d7/a1
 
 .check_skip:
                     ; Skip palette write for scanlines 107-111 to avoid
@@ -140,6 +143,38 @@ TimerBHandler:
                     rte
 
 ; ----------------------------------------------------------------------------
+; SetPalettePointers — set up palette pointers based on effect type
+;
+; d0.w = effect type (0-7)
+; For single-row effects (1, 4, 7): all pointers → c1
+; For multi-row effects: ptr1→c1, ptr2→c2, ptr3→c3
+; ----------------------------------------------------------------------------
+SetPalettePointers:
+                    lea         font_palette_c1, a0
+                    move.l      a0, font_pal_ptr1       ; row 1 always c1
+
+                    cmp.w       #1, d0
+                    beq.s       .single_row
+                    cmp.w       #4, d0
+                    beq.s       .single_row
+                    cmp.w       #7, d0
+                    beq.s       .single_row
+
+                    ; Multi-row: c1, c2, c3
+                    lea         font_palette_c2, a0
+                    move.l      a0, font_pal_ptr2
+                    lea         font_palette_c3, a0
+                    move.l      a0, font_pal_ptr3
+                    rts
+
+.single_row:
+                    ; Single-row: all c1
+                    lea         font_palette_c1, a0
+                    move.l      a0, font_pal_ptr2
+                    move.l      a0, font_pal_ptr3
+                    rts
+
+; ----------------------------------------------------------------------------
 ; BSS
 ; ----------------------------------------------------------------------------
                     section     BSS
@@ -149,5 +184,8 @@ old_tbcr:           ds.b        1
 old_tbdr:           ds.b        1
                     even
 raster_ptr:         ds.l        1
+font_pal_ptr1:      ds.l        1               ; palette pointer for row 1
+font_pal_ptr2:      ds.l        1               ; palette pointer for row 2
+font_pal_ptr3:      ds.l        1               ; palette pointer for row 3
 
                     section     TEXT
