@@ -320,8 +320,9 @@ ScrollPlot:
 SetScrollSpeedExtra:
                     cmp.w       #1, d0
                     beq.s       .fast
-                    ; Future: cmp.w #2, d0 / cmp.w #7, d0 — enable when those
-                    ; effects are tuned. Keep them at default speed for now.
+                    cmp.w       #2, d0
+                    beq.s       .fast
+                    ; Future: cmp.w #7, d0 — enable when type 7 is tuned.
                     clr.w       scroll_speed_extra
                     rts
 .fast:
@@ -484,7 +485,7 @@ ScrollPlotType1:
 ; Simplified: plot row 1 normally, then reflection with backward source read.
 ; ----------------------------------------------------------------------------
 TYPE2_BASE_Y        equ     78                      ; row 1 Y at right edge (after palette swap)
-TYPE2_REFLECT_GAP   equ     2                       ; small gap between row 1 and reflection
+TYPE2_REFLECT_GAP   equ     6                       ; gap (lines) between row 1 and reflection
 
 ScrollPlotType2:
                     bsr         ClearScrollerRegion

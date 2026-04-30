@@ -146,3 +146,36 @@ To **change inside amplitude**, scale every value in the table.
 `ScrollPlotType1` — clears the scroller region (lines 70–199) each frame to
 avoid trails, then plots 20 strips with vertical doubling. Each strip's Y
 offset is `TYPE1_ROW_Y + sine_offset + type1_inside_lut[strip]`.
+
+---
+
+## Effect 2 — Water reflection
+
+A scroller tilted on a gentle diagonal (down from right to left), with a
+mirrored, 1-line interleaved reflection drawn underneath — the visual
+illusion is text floating above its own ripple. Horizontal scroll runs at
+2× speed.
+
+### Configuration
+
+| Knob                    | Where                                       | Current value | What it does                              |
+| ----------------------- | ------------------------------------------- | ------------- | ----------------------------------------- |
+| Top-row base Y          | `src/scroller/engine.s` `TYPE2_BASE_Y`      | 78            | Y of right-most column of top scroller    |
+| Reflection gap          | `src/scroller/engine.s` `TYPE2_REFLECT_GAP` | 6             | scanlines between row 1 and reflection    |
+| Top-row diagonal slope  | `lsr.w #1, d7` inside `.strip`              | d6/2 (½ line/strip) | tilt rate: lines per pword column   |
+| Horizontal scroll speed | `SetScrollSpeedExtra`                       | 2× (extra=1)  | two render+shift per VBL                  |
+
+To **steepen the diagonal**, replace `lsr.w #1, d7` with no shift (1 line per
+strip). To **flatten** it, replace with `lsr.w #2, d7` (¼ line per strip).
+
+To **change the gap**, edit `TYPE2_REFLECT_GAP` (in scanlines).
+
+### Routine
+
+`ScrollPlotType2` — clears the scroller region, then for each of 20 strips:
+
+1. Computes a Y offset based on column position (right → low Y, left → high Y).
+2. Plots the 34-line scroller column at that Y.
+3. Plots the reflection below, reading the source backward (line 33 → line 0)
+   at 2× line stride so each source line appears with a 1-line gap (giving
+   the interleaved "ripple" look).
