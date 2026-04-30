@@ -195,6 +195,8 @@ ScrollPlotDispatch:
                     beq         ScrollPlotType1         ; type 1 = 2× tall + sine
                     cmp.w       #2, d0
                     beq         ScrollPlotType2         ; type 2 = anti-symmetric
+                    cmp.w       #3, d0
+                    beq         ScrollPlotType3         ; type 3 = diagonal same dir
                     cmp.w       #4, d0
                     beq         ScrollPlotType4         ; type 4 = 4× tall spread
                     cmp.w       #7, d0
@@ -406,6 +408,74 @@ ScrollPlotType2:
                     ; Row 2 (normal too - anti-symmetry is in Y position)
                     move.l      d0, (a3)
                     move.l      d1, 4(a3)
+
+                    lea         SCROLL_BUFFER_LINE_BYTES(a0), a0
+                    lea         SCREEN_LINE_BYTES(a1), a1
+                    lea         SCREEN_LINE_BYTES(a3), a3
+                    dbra        d4, .scanline
+
+                    dbra        d6, .strip
+                    rts
+
+; ----------------------------------------------------------------------------
+; ScrollPlotType3 — Diagonal same direction
+;
+; 2 rows, both with linear Y offset increasing left-to-right.
+; Creates a diagonal wave where both rows tilt the same way.
+; ----------------------------------------------------------------------------
+TYPE3_ROW1_Y        equ     80                      ; row 1 base
+TYPE3_ROW2_Y        equ     145                     ; row 2 base
+TYPE3_SLOPE         equ     1                       ; lines per strip
+
+ScrollPlotType3:
+                    move.l      back_buffer_ptr, a5
+                    lea         scroll_buffer, a2
+
+                    ; Plot 20 strips with linear diagonal offset
+                    moveq       #19, d6                 ; strip counter
+
+.strip:
+                    ; Strip index = 19 - d6
+                    move.w      #19, d0
+                    sub.w       d6, d0
+
+                    ; Linear slope: offset = strip_index * TYPE3_SLOPE
+                    ; For simplicity: offset = strip_index (1 line per strip)
+                    move.w      d0, d5                  ; d5 = Y offset (0-19 lines)
+
+                    ; Buffer source for this strip
+                    lsl.w       #3, d0                  ; * 8 bytes per pword
+                    lea         0(a2,d0.w), a0
+
+                    ; Row 1: Y = base + offset (diagonal down-right)
+                    move.w      #TYPE3_ROW1_Y, d2
+                    add.w       d5, d2
+                    mulu.w      #SCREEN_LINE_BYTES, d2
+                    move.l      a5, a1
+                    adda.l      d2, a1
+                    adda.w      d0, a1
+
+                    ; Row 2: same direction diagonal
+                    move.w      #TYPE3_ROW2_Y, d2
+                    add.w       d5, d2                  ; SAME direction as row 1
+                    mulu.w      #SCREEN_LINE_BYTES, d2
+                    move.l      a5, a3
+                    adda.l      d2, a3
+                    adda.w      d0, a3
+
+                    ; Copy 34 scanlines to both rows
+                    move.w      #SCROLL_HEIGHT-1, d4
+.scanline:
+                    move.l      (a0), d1
+                    move.l      4(a0), d3
+
+                    ; Row 1
+                    move.l      d1, (a1)
+                    move.l      d3, 4(a1)
+
+                    ; Row 2
+                    move.l      d1, (a3)
+                    move.l      d3, 4(a3)
 
                     lea         SCROLL_BUFFER_LINE_BYTES(a0), a0
                     lea         SCREEN_LINE_BYTES(a1), a1
