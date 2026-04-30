@@ -193,6 +193,8 @@ ScrollPlotDispatch:
                     beq         ScrollPlotType0         ; type 0 = 3 fixed rows
                     cmp.w       #1, d0
                     beq         ScrollPlotType1         ; type 1 = 2× tall + sine
+                    cmp.w       #4, d0
+                    beq         ScrollPlotType4         ; type 4 = 4× tall spread
                     cmp.w       #7, d0
                     beq         ScrollPlotType7         ; type 7 = sine wave
                     bra         ScrollPlotType0         ; fallback
@@ -320,6 +322,59 @@ ScrollPlotType1:
                     ; Advance: source +1 line, dest +2 lines
                     lea         SCROLL_BUFFER_LINE_BYTES(a0), a0
                     lea         SCREEN_LINE_BYTES*2(a1), a1
+                    dbra        d4, .scanline
+
+                    dbra        d6, .strip
+                    rts
+
+; ----------------------------------------------------------------------------
+; ScrollPlotType4 — Spread vertical (4× tall)
+;
+; Each source scanline written 4 times to consecutive dest lines = 4× zoom.
+; Only plots 25 source lines (of 34) to fit on screen: 25×4 = 100 dest lines.
+; Single centered row, no sine wave (pure vertical stretch).
+; ----------------------------------------------------------------------------
+TYPE4_ROW_Y         equ     90                      ; centered for 100-line output
+TYPE4_SRC_LINES     equ     25                      ; only plot 25 of 34 lines
+
+ScrollPlotType4:
+                    move.l      back_buffer_ptr, a5
+                    lea         scroll_buffer, a2
+
+                    ; Plot 20 strips (no sine offset, just stretch)
+                    moveq       #19, d6                 ; strip counter
+
+.strip:
+                    ; Buffer source for this strip
+                    move.w      #19, d0
+                    sub.w       d6, d0
+                    lsl.w       #3, d0                  ; * 8 bytes per pword
+                    lea         0(a2,d0.w), a0
+
+                    ; Screen dest
+                    move.l      a5, a1
+                    lea         TYPE4_ROW_Y*SCREEN_LINE_BYTES(a1), a1
+                    adda.w      d0, a1
+
+                    ; Copy 25 source lines → 100 dest lines (4× vertical)
+                    move.w      #TYPE4_SRC_LINES-1, d4
+.scanline:
+                    move.l      (a0), d0                ; planes 0,1
+                    move.l      4(a0), d1               ; planes 2,3
+
+                    ; Write 4 consecutive lines
+                    move.l      d0, (a1)
+                    move.l      d1, 4(a1)
+                    move.l      d0, SCREEN_LINE_BYTES(a1)
+                    move.l      d1, SCREEN_LINE_BYTES+4(a1)
+                    move.l      d0, SCREEN_LINE_BYTES*2(a1)
+                    move.l      d1, SCREEN_LINE_BYTES*2+4(a1)
+                    move.l      d0, SCREEN_LINE_BYTES*3(a1)
+                    move.l      d1, SCREEN_LINE_BYTES*3+4(a1)
+
+                    ; Advance: source +1 line, dest +4 lines
+                    lea         SCROLL_BUFFER_LINE_BYTES(a0), a0
+                    lea         SCREEN_LINE_BYTES*4(a1), a1
                     dbra        d4, .scanline
 
                     dbra        d6, .strip
