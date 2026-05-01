@@ -390,3 +390,107 @@ lea         SCREEN_LINE_BYTES*2(a1), a1   ; advance 2 lines
 
 **Tradeoff:** Larger output means fewer source lines fit — 4× tall truncates
 the bottom of glyphs slightly.
+
+---
+
+## Smooth 8 px / VBL scrolling: alternating-page byte-shift
+
+### 2026-04-30 — How RATBOY did smooth 8 px scrolling on a 1988 STF
+
+**Problem:** Naive CPU pword-shift gives 16 px / VBL — visibly chunky for a
+40-px-wide font. Naive CPU per-plane byte-shift across the whole buffer is
+correct for 8 px / VBL but is too slow on a 68000 (~5700 byte-moves per
+frame, ~190 scanlines of work, frame-budget-blowing).
+
+**RATBOY's trick (CONFO.S):** double-buffered screen pages, where each page
+holds the same scroll content but offset from the other by 1 byte (= 8 px)
+horizontally. Display alternates each frame; visual rate = 8 px / VBL.
+Per-frame work amortizes to **~40 sl** (≈ 5× cheaper than full byte-shift):
+
+1. **Bulk pword-shift** of the inactive page's scroll row (38 long-copies =
+   152 bytes = pwords 1..19 → pwords 0..18).
+2. **Fill rightmost pword** (8 bytes) from the OTHER (currently-displayed)
+   page's rightmost pword via 2 long-copies (= the `ad_copy` reference).
+3. **Byte-shift the rightmost pword in place** with 8 byte-moves: per-plane
+   high byte ← previous page's plane low; per-plane low byte ← incoming
+   "next pword" data (from a separate staging slot).
+
+**Why it works:** the bulk shift is content-preserving (just slides existing
+content left by 16 px). The OTHER page's rightmost pword already represents
+"the latest 16 px the player has seen at the right edge", so copying it over
+and byte-shifting gives the inactive page content offset by 8 px from the
+displayed one. When alternation happens at vsync, the eye sees a smooth 8-px
+slide every frame.
+
+**Memory layout (CONFO.S):**
+
+```
+$080000  ────►  Page A (full 32K screen)
+                ├── displayed scroll row (line 73 ish)
+                └── off-screen scroll buffer (deca = 33600 bytes from base,
+                    past the visible 200 lines)
+
+$090000  ────►  Page B  (mirror layout)
+```
+
+`deb_blk = phys + deca` (off-screen workarea on the back-buffer page).
+`ad_copy = front-buffer page + deca + 152` (= rightmost pword of the
+displayed page's off-screen scroll buffer). `phys` toggles between
+$080000 and $090000 each frame via `swap`.
+
+**Why two pages instead of two RAM buffers?** On STF the screen base
+register can only point to RAM-aligned 256-byte pages, so the natural
+double-buffer slots ARE the screen. Off-screen workarea on the same page
+is just a bigger allocation — both pages are 32K each and only the first
+~32000 bytes are visible, the rest is free workspace.
+
+**Cost breakdown (CONFO.S `scrolg`, per scanline):**
+
+| Step          | Cycles | Bytes moved |
+| ------------- | -----: | ----------: |
+| REPT 38 long-copy | 456 | 152 (pwords 1..19 → 0..18) |
+| REPT 2 long-copy  |  24 |   8 (ad_copy → pword 19) |
+| 8 byte-moves      | 128 |   8 (rightmost pword byte-shift) |
+| **Per scanline**  | **608** | **168** |
+
+× 34 scanlines ≈ 20700 cycles ≈ **40 sl per frame** for the whole shift.
+Compare to ~190 sl for naive full-buffer byte-shift — **~5× speedup**.
+
+### 2026-04-30 — Adapting to our 21-pword off-RAM buffer architecture
+
+Our scroll buffer is a 21-pword × 34-line area in regular RAM (not on the
+screen pages), and our plot routines copy from the buffer to the back
+screen. To get the same 8-px/VBL effect with our architecture we keep the
+double-buffering at the **scroll-buffer** level rather than the screen-page
+level:
+
+* Two scroll buffers, `scroll_buffer_a` and `scroll_buffer_b`, both 21-pword
+  × 34-line in RAM. They hold the same scroll content offset by 1 byte (= 8 px).
+* `scroll_active_buf` (0/1) flips each VBL — it picks which buffer the plot
+  routines read from this frame.
+* `scroll_next_pword` (1 pword × 34 lines in RAM) is the "queue" the
+  renderer fills with the upcoming character data.
+* `scroll_byte_pending` (0/1) tracks the byte-shift phase: one half of
+  `scroll_next_pword` per VBL.
+
+**Per-VBL pipeline:**
+
+1. Plot the active buffer to the back screen (existing plot routines, but
+   now reading from `scroll_buffer_a` or `scroll_buffer_b` based on flag).
+2. Toggle `scroll_active_buf` — the *other* buffer is what we plot next frame.
+3. **Update the now-active buffer:**
+   * Pword-shift it left by 1 pword (in-place, like the existing
+     `ScrollShift`).
+   * Fill its new rightmost pword from a byte-shift of the *previously
+     displayed* buffer's rightmost pword + the relevant half of
+     `scroll_next_pword` (selected by `scroll_byte_pending`).
+4. Toggle `scroll_byte_pending`. When it wraps from 1 → 0, render a new
+   pword into `scroll_next_pword` (existing 5-phase glyph blender, just
+   targeting the staging area instead of `scroll_buffer + RIGHT_OFFS`).
+
+The plot routines need one tiny change: `lea scroll_buffer, a2` becomes
+`move.l scroll_plot_addr, a2`, where `scroll_plot_addr` is set in
+`ScrollerStepVblank` to whichever of A/B is active this frame.
+
+**Result:** smooth 8-px/VBL scrolling matching the 1988 original, at ~50 sl
+of shift work per frame instead of ~190.

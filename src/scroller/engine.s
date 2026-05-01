@@ -48,35 +48,87 @@ ScrollerInit:
                     move.w      #SCROLL_EFFECT_DEFAULT, scroll_effect_type
                     move.w      #SCROLL_EFFECT_DEFAULT, d0
                     bsr         SetPalettePointers      ; set palette ptrs based on effect
-                    bsr         SetScrollSpeedExtra     ; set 2x speed flag based on effect
+                    clr.w       scroll_byte_pending     ; first VBL renders new pword
+                    clr.w       scroll_active_buf       ; A is initial active buffer
+                    move.l      #scroll_buffer_a, scroll_plot_addr
                     clr.w       sine_frame_count
                     move.w      #1, sine_direction      ; start moving down
                     clr.w       sine_offset
 
-                    lea         scroll_buffer, a0
-                    move.w      #(SCROLL_BUFFER_BYTES/4)-1, d0
                     moveq       #0, d1
-.clr:
+                    ; Clear scroll_buffer_a
+                    lea         scroll_buffer_a, a0
+                    move.w      #(SCROLL_BUFFER_BYTES/4)-1, d0
+.clr_a:
                     move.l      d1, (a0)+
-                    dbra        d0, .clr
+                    dbra        d0, .clr_a
+                    ; Clear scroll_buffer_b
+                    lea         scroll_buffer_b, a0
+                    move.w      #(SCROLL_BUFFER_BYTES/4)-1, d0
+.clr_b:
+                    move.l      d1, (a0)+
+                    dbra        d0, .clr_b
+                    ; Clear scroll_next_pword (= 8 bytes × 34 lines = 272 bytes = 68 longs)
+                    lea         scroll_next_pword, a0
+                    move.w      #(8*SCROLL_HEIGHT/4)-1, d0
+.clr_n:
+                    move.l      d1, (a0)+
+                    dbra        d0, .clr_n
                     rts
 
 ; ----------------------------------------------------------------------------
 ; ScrollerStepVblank — full per-VBL pipeline. Called from MainLoop.
 ;
-; Pipeline: render new pword → shift buffer left → plot via current effect.
-; Some effects (1, 2, 7) need 2× horizontal speed to match the original —
-; for those, render+shift runs twice before plot.
+; Alternating dual-buffer architecture (RATBOY 1988 trick — see
+; docs/LEARNINGS.md "Smooth 8 px / VBL"). Two buffers A and B hold the
+; same scroll content offset by 1 byte (= 8 px) horizontally. Each VBL:
+;
+;   1. Plot from current active buffer (scroll_plot_addr).
+;   2. Toggle which buffer is active.
+;   3. If scroll_byte_pending == 0, render a fresh pword to scroll_next_pword.
+;   4. ScrollShiftAndFill: pword-shift the new active + byte-shift fill
+;      its rightmost pword from the just-displayed buffer + scroll_next_pword.
+;   5. Toggle scroll_byte_pending so the next VBL uses the other half
+;      of the rendered pword.
+;
+; Visual: 8 px / VBL smooth scroll, ~40 sl shift work per frame.
 ; ----------------------------------------------------------------------------
 ScrollerStepVblank:
-                    bsr         ScrollRenderNextPword
-                    bsr         ScrollShift
-                    tst.w       scroll_speed_extra
-                    beq.s       .plot
-                    bsr         ScrollRenderNextPword
-                    bsr         ScrollShift
-.plot:
                     bsr         ScrollPlotDispatch
+
+                    ; Toggle active buffer flag
+                    move.w      scroll_active_buf, d0
+                    eor.w       #1, d0
+                    move.w      d0, scroll_active_buf
+
+                    ; Set scroll_plot_addr to the new active and load addresses
+                    ; into a0 (target = new active) and a1 (source = old active).
+                    tst.w       d0
+                    beq.s       .new_a
+                    move.l      #scroll_buffer_b, scroll_plot_addr
+                    lea         scroll_buffer_b, a0
+                    lea         scroll_buffer_a, a1
+                    bra.s       .render_check
+.new_a:
+                    move.l      #scroll_buffer_a, scroll_plot_addr
+                    lea         scroll_buffer_a, a0
+                    lea         scroll_buffer_b, a1
+.render_check:
+                    ; Render new pword into scroll_next_pword every other VBL
+                    tst.w       scroll_byte_pending
+                    bne.s       .no_render
+                    movem.l     a0/a1, -(sp)
+                    bsr         ScrollRenderNextPword
+                    movem.l     (sp)+, a0/a1
+.no_render:
+                    move.w      scroll_byte_pending, d4 ; 0 or 1 = byte offset
+
+                    bsr         ScrollShiftAndFill
+
+                    ; Toggle byte_pending for next VBL
+                    move.w      scroll_byte_pending, d0
+                    eor.w       #1, d0
+                    move.w      d0, scroll_byte_pending
                     rts
 
 ; ----------------------------------------------------------------------------
@@ -173,13 +225,13 @@ ScrollRenderNextPword:
 
 ; --- .copy_pword: direct copy 34 lines from a0 to scroll_buffer staging ---
 .copy_pword:
-                    lea         scroll_buffer+SCROLL_BUFFER_RIGHT_OFFS, a2
+                    lea         scroll_next_pword, a2
                     move.w      #SCROLL_HEIGHT-1, d7
 .copy_line:
                     move.l      (a0), (a2)
                     move.l      4(a0), 4(a2)
                     lea         FONT_GLYPH_LINE_B(a0), a0
-                    lea         SCROLL_BUFFER_LINE_BYTES(a2), a2
+                    lea         8(a2), a2
                     dbra        d7, .copy_line
                     rts
 
@@ -187,7 +239,7 @@ ScrollRenderNextPword:
 ; a0 = source pword A, a1 = source pword B
 ; Output: (A & $FF00) | ((B >> 8) & $00FF) for each plane word
 .blend_high_high:
-                    lea         scroll_buffer+SCROLL_BUFFER_RIGHT_OFFS, a2
+                    lea         scroll_next_pword, a2
                     move.w      #SCROLL_HEIGHT-1, d7
 .bhh_line:
                     ; Plane 0
@@ -220,14 +272,14 @@ ScrollRenderNextPword:
                     move.w      d0, 6(a2)
                     lea         FONT_GLYPH_LINE_B(a0), a0
                     lea         FONT_GLYPH_LINE_B(a1), a1
-                    lea         SCROLL_BUFFER_LINE_BYTES(a2), a2
+                    lea         8(a2), a2
                     dbra        d7, .bhh_line
                     rts
 
 ; --- .blend_low_high: left 8px from a0 low byte, right 8px from a1 high byte ---
 ; Output: ((A << 8) & $FF00) | ((B >> 8) & $00FF) for each plane word
 .blend_low_high:
-                    lea         scroll_buffer+SCROLL_BUFFER_RIGHT_OFFS, a2
+                    lea         scroll_next_pword, a2
                     move.w      #SCROLL_HEIGHT-1, d7
 .blh_line:
                     ; Plane 0
@@ -260,26 +312,67 @@ ScrollRenderNextPword:
                     move.w      d0, 6(a2)
                     lea         FONT_GLYPH_LINE_B(a0), a0
                     lea         FONT_GLYPH_LINE_B(a1), a1
-                    lea         SCROLL_BUFFER_LINE_BYTES(a2), a2
+                    lea         8(a2), a2
                     dbra        d7, .blh_line
                     rts
 
 ; ----------------------------------------------------------------------------
-; ScrollShift — buffer-only shift (pword 1..20 → 0..19) per scanline.
-; Pure CPU. ~54 sl wallclock. Independent of screen plot.
+; ScrollShiftAndFill — RATBOY-style smooth-scroll engine.
+;
+; Pword-shifts the target buffer left by 1 pword (= 16 px), then fills the
+; rightmost pword by byte-shifting between the SOURCE buffer's rightmost
+; pword (the buffer we just plotted = the OTHER page in the alternating
+; setup) and the relevant half of scroll_next_pword. Net visual: every two
+; VBLs the rendered pword is fully integrated, with each frame in between
+; shifting 8 px (because the alternation between target and source = same
+; content, 1-byte offset).
+;
+; Inputs:
+;   a0 = target buffer base (the one being prepared for next display)
+;   a1 = source buffer base (the one just displayed; provides bytes 152..159
+;        for the byte-shift fill)
+;   d4 = 0 (use scroll_next_pword high bytes per plane: bytes 0/2/4/6) or
+;        1 (use low bytes: bytes 1/3/5/7)
+;
+; Per scanline cost: 38 long-copies + 8 byte-moves ≈ 600 cy (~40 sl/frame).
 ; ----------------------------------------------------------------------------
-ScrollShift:
-                    lea         scroll_buffer+PWORD_BYTES, a0   ; src = pword 1
-                    lea         scroll_buffer, a1                ; dst = pword 0
+ScrollShiftAndFill:
+                    lea         scroll_next_pword, a4
+                    adda.w      d4, a4                  ; a4 = scroll_next + offset
+
                     move.w      #SCROLL_HEIGHT-1, d7
 .line:
-                    rept        5
-                    movem.l     (a0)+, d0-d6/a6
-                    movem.l     d0-d6/a6, (a1)
-                    lea         32(a1), a1
+                    ; Bulk pword-shift target: 38 long copies, bytes 8..159 → 0..151
+                    move.l      a0, a3                  ; a3 = dst (= byte 0 of scanline)
+                    move.l      a0, a2
+                    addq.l      #PWORD_BYTES, a2        ; a2 = src (= byte 8)
+                    rept        38
+                    move.l      (a2)+, (a3)+
                     endr
-                    addq.l      #8, a0
-                    addq.l      #8, a1
+                    ; a3 now at byte 152 of target scanline (= pword 19 boundary)
+
+                    ; Byte-shift fill rightmost pword (pword 19):
+                    ;   target byte 152 (P0 hi) <- source byte 153 (P0 lo)
+                    ;   target byte 153 (P0 lo) <- scroll_next byte (offset+0)
+                    ;   target byte 154 (P1 hi) <- source byte 155 (P1 lo)
+                    ;   target byte 155 (P1 lo) <- scroll_next byte (offset+2)
+                    ;   ... same for P2, P3
+                    move.l      a1, a5
+                    adda.w      #(SCROLL_BUFFER_VIS_PWORDS-1)*PWORD_BYTES, a5   ; a5 = source pword 19 (= byte 152)
+
+                    move.b      1(a5), (a3)+
+                    move.b      (a4), (a3)+
+                    move.b      3(a5), (a3)+
+                    move.b      2(a4), (a3)+
+                    move.b      5(a5), (a3)+
+                    move.b      4(a4), (a3)+
+                    move.b      7(a5), (a3)+
+                    move.b      6(a4), (a3)+
+
+                    ; Advance to next scanline
+                    lea         SCROLL_BUFFER_LINE_BYTES(a0), a0
+                    lea         SCROLL_BUFFER_LINE_BYTES(a1), a1
+                    lea         8(a4), a4               ; scroll_next_pword stride = 8
                     dbra        d7, .line
                     rts
 
@@ -288,7 +381,7 @@ ScrollShift:
 ; 3-way fan-out CPU. ~108 sl wallclock.
 ; ----------------------------------------------------------------------------
 ScrollPlot:
-                    lea         scroll_buffer, a0                ; src = pword 0
+                    move.l      scroll_plot_addr, a0            ; src = pword 0
                     move.l      back_buffer_ptr, a5
                     lea         (SCROLL_Y_1*SCREEN_LINE_BYTES)(a5), a2
                     lea         (SCROLL_Y_2*SCREEN_LINE_BYTES)(a5), a3
@@ -309,24 +402,6 @@ ScrollPlot:
                     lea         24(a3), a3
                     lea         24(a4), a4
                     dbra        d7, .line
-                    rts
-
-; ----------------------------------------------------------------------------
-; SetScrollSpeedExtra — choose 2x horizontal scroll for effects that need it.
-; Effects 1, 2, 7 match the original at 2 pwords/VBL; others run 1 pword/VBL.
-; In:  d0 = effect type
-; Out: scroll_speed_extra = 0 (default speed) or 1 (extra render+shift per VBL)
-; ----------------------------------------------------------------------------
-SetScrollSpeedExtra:
-                    cmp.w       #1, d0
-                    beq.s       .fast
-                    cmp.w       #2, d0
-                    beq.s       .fast
-                    ; Future: cmp.w #7, d0 — enable when type 7 is tuned.
-                    clr.w       scroll_speed_extra
-                    rts
-.fast:
-                    move.w      #1, scroll_speed_extra
                     rts
 
 ; ============================================================================
@@ -364,7 +439,7 @@ ScrollPlotDispatch:
 ; Copies buffer[0..19] to all 3 screen rows at fixed Y positions.
 ; ----------------------------------------------------------------------------
 ScrollPlotType0:
-                    lea         scroll_buffer, a0
+                    move.l      scroll_plot_addr, a0
                     move.l      back_buffer_ptr, a5
                     lea         (SCROLL_Y_1*SCREEN_LINE_BYTES)(a5), a2
                     lea         (SCROLL_Y_2*SCREEN_LINE_BYTES)(a5), a3
@@ -425,7 +500,7 @@ ScrollPlotType1:
                     move.w      d0, sine_offset
 
                     move.l      back_buffer_ptr, a5
-                    lea         scroll_buffer, a2
+                    move.l      scroll_plot_addr, a2
 
                     ; Base Y + bob offset
                     move.w      #TYPE1_ROW_Y, d3
@@ -491,7 +566,7 @@ ScrollPlotType2:
                     bsr         ClearScrollerRegion
 
                     move.l      back_buffer_ptr, a5
-                    lea         scroll_buffer, a2
+                    move.l      scroll_plot_addr, a2
 
                     moveq       #19, d6                 ; strip counter
 
@@ -595,7 +670,7 @@ ScrollPlotType3:
                     move.w      d0, sine_offset
 
                     move.l      back_buffer_ptr, a5
-                    lea         scroll_buffer, a2
+                    move.l      scroll_plot_addr, a2
 
                     move.w      #TYPE3_ROW_Y, d3
                     add.w       sine_offset, d3         ; d3 = base Y this frame
@@ -658,7 +733,7 @@ TYPE4_ROW2_START_Y  equ     2*TYPE4_MIRROR_Y-TYPE4_ROW1_TOP_Y       ; = 184
 
 ScrollPlotType4:
                     move.l      back_buffer_ptr, a5
-                    lea         scroll_buffer, a2
+                    move.l      scroll_plot_addr, a2
 
                     moveq       #19, d6                 ; strip counter
 
@@ -707,49 +782,76 @@ ScrollPlotType4:
                     rts
 
 ; ----------------------------------------------------------------------------
-; ScrollPlotType5 — Spread vertical (4× tall)
+; ScrollPlotType5 — Static bottom scroller + diagonal interleaved on top
 ;
-; Each source scanline written 4 times to consecutive dest lines = 4× zoom.
-; Only plots 25 source lines (of 34) to fit on screen: 25×4 = 100 dest lines.
-; Single centered row, no sine wave (pure vertical stretch).
-; (Will be replaced later when we tackle "real effect 5".)
+; Bottom: a horizontal scroller at SCROLL_Y_3 (= 160), same Y as effect 0's
+; row 3. Plain 34-line copy.
+;
+; Top: a 1-line-interleaved scroller whose Y rises from right to left
+; (slopes "from bottom-right to top-left"). Anchored so source line 33 at
+; strip 19 lands at TYPE5_TOP_RIGHT_Y (= 176, mid of bottom scroller).
+; With 1-line interleave, source line k at strip s lands at
+; TYPE5_TOP_BASE_Y + s + 2·k. Slope = 1 line per strip going down to the
+; right.
+;
+; Both scrollers share the same content (read from scroll_buffer twice).
+; ClearScrollerRegion is called each frame so the interleave gaps stay
+; black and the slope motion doesn't trail.
 ; ----------------------------------------------------------------------------
-TYPE5_ROW_Y         equ     90                      ; centered for 100-line output
-TYPE5_SRC_LINES     equ     25                      ; only plot 25 of 34 lines
+TYPE5_BOT_Y         equ     SCROLL_Y_3              ; = 160
+TYPE5_TOP_RIGHT_Y   equ     176                     ; bottom of top scroller at strip 19
+; Slope = s + s/2 = 1.5 lines per strip → 28 lines total over 19 strips.
+; Top-left ends ~10 px higher than the 1-line/strip version.
+TYPE5_TOP_BASE_Y    equ     TYPE5_TOP_RIGHT_Y-28-66 ; = 82 (src 0 Y at strip 0)
 
 ScrollPlotType5:
+                    bsr         ClearScrollerRegion
+
                     move.l      back_buffer_ptr, a5
-                    lea         scroll_buffer, a2
+                    move.l      scroll_plot_addr, a2
 
                     moveq       #19, d6                 ; strip counter
 
 .strip:
                     move.w      #19, d0
-                    sub.w       d6, d0
+                    sub.w       d6, d0                  ; d0 = strip index s (0..19)
+                    move.w      d0, d3                  ; save s
                     lsl.w       #3, d0                  ; * 8 bytes per pword
-                    lea         0(a2,d0.w), a0
+                    lea         0(a2,d0.w), a0          ; source
 
+                    ; --- Bottom scroller: Y = TYPE5_BOT_Y, plain ---
                     move.l      a5, a1
-                    lea         TYPE5_ROW_Y*SCREEN_LINE_BYTES(a1), a1
+                    lea         (TYPE5_BOT_Y*SCREEN_LINE_BYTES)(a1), a1
                     adda.w      d0, a1
 
-                    move.w      #TYPE5_SRC_LINES-1, d4
-.scanline:
-                    move.l      (a0), d0                ; planes 0,1
-                    move.l      4(a0), d1               ; planes 2,3
-
-                    move.l      d0, (a1)
-                    move.l      d1, 4(a1)
-                    move.l      d0, SCREEN_LINE_BYTES(a1)
-                    move.l      d1, SCREEN_LINE_BYTES+4(a1)
-                    move.l      d0, SCREEN_LINE_BYTES*2(a1)
-                    move.l      d1, SCREEN_LINE_BYTES*2+4(a1)
-                    move.l      d0, SCREEN_LINE_BYTES*3(a1)
-                    move.l      d1, SCREEN_LINE_BYTES*3+4(a1)
-
+                    move.l      a0, a4                  ; save src for top scroll
+                    move.w      #SCROLL_HEIGHT-1, d4
+.bot_line:
+                    move.l      (a0), (a1)
+                    move.l      4(a0), 4(a1)
                     lea         SCROLL_BUFFER_LINE_BYTES(a0), a0
-                    lea         SCREEN_LINE_BYTES*4(a1), a1
-                    dbra        d4, .scanline
+                    lea         SCREEN_LINE_BYTES(a1), a1
+                    dbra        d4, .bot_line
+
+                    ; --- Top scroller: 1-line interleave, slope down-right ---
+                    move.w      #TYPE5_TOP_BASE_Y, d2
+                    add.w       d3, d2                  ; Y = base + s
+                    move.w      d3, d5
+                    lsr.w       #1, d5
+                    add.w       d5, d2                  ; Y = base + s + s/2 = base + 1.5·s
+                    mulu.w      #SCREEN_LINE_BYTES, d2
+                    move.l      a5, a3
+                    adda.l      d2, a3
+                    adda.w      d0, a3
+
+                    move.l      a4, a0                  ; reset source
+                    move.w      #SCROLL_HEIGHT-1, d4
+.top_line:
+                    move.l      (a0), (a3)
+                    move.l      4(a0), 4(a3)
+                    lea         SCROLL_BUFFER_LINE_BYTES(a0), a0
+                    lea         SCREEN_LINE_BYTES*2(a3), a3
+                    dbra        d4, .top_line
 
                     dbra        d6, .strip
                     rts
@@ -764,7 +866,7 @@ TYPE6_ROW1_Y        equ     78                      ; row 1 (from original)
 TYPE6_ROW2_Y        equ     119                     ; row 2 (41 lines below)
 
 ScrollPlotType6:
-                    lea         scroll_buffer, a0
+                    move.l      scroll_plot_addr, a0
                     move.l      back_buffer_ptr, a5
                     lea         (TYPE6_ROW1_Y*SCREEN_LINE_BYTES)(a5), a2
                     lea         (TYPE6_ROW2_Y*SCREEN_LINE_BYTES)(a5), a3
@@ -797,7 +899,7 @@ TYPE7_SLOPE         equ     1                       ; lines per strip
 
 ScrollPlotType7:
                     move.l      back_buffer_ptr, a5
-                    lea         scroll_buffer, a2
+                    move.l      scroll_plot_addr, a2
 
                     moveq       #19, d6                 ; strip counter
 
@@ -902,7 +1004,12 @@ type1_traj_lut:
                     section     BSS
 
                     even
-scroll_buffer:        ds.b      SCROLL_BUFFER_BYTES
+; Two scroll buffers, alternating display each VBL. They hold the same
+; scroll content offset by 1 byte (= 8 px) horizontally.
+scroll_buffer_a:      ds.b      SCROLL_BUFFER_BYTES
+scroll_buffer_b:      ds.b      SCROLL_BUFFER_BYTES
+; Staging area for the next-pword content from the renderer; 1 pword × 34 lines.
+scroll_next_pword:    ds.b      8*SCROLL_HEIGHT
 
 scroll_render_phase:  ds.w      1       ; 0-4 phase in 5-pword cycle
 scroll_text_cursor:   ds.l      1
@@ -910,7 +1017,10 @@ scroll_curr_glyph:    ds.l      1       ; current char glyph pointer
 scroll_next_glyph:    ds.l      1       ; next char glyph pointer (for blending)
 
 scroll_effect_type:   ds.w      1       ; 0=3-row fixed, 7=sine wave
-scroll_speed_extra:   ds.w      1       ; 0=1x, 1=2x horizontal scroll/VBL
+scroll_active_buf:    ds.w      1       ; 0 = scroll_buffer_a active, 1 = b
+scroll_byte_pending:  ds.w      1       ; 0 = render this VBL + use high bytes, 1 = use low bytes
+                    even
+scroll_plot_addr:     ds.l      1       ; pointer to current active buffer (read by plot routines)
 sine_frame_count:     ds.w      1       ; phase index 0..49 (Type 1 trajectory LUT)
 sine_direction:       ds.w      1       ; +1 or -1 for bob direction
 sine_offset:          ds.w      1       ; current vertical bob offset (scanlines)
