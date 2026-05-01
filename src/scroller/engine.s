@@ -245,7 +245,10 @@ ScrollRenderNextPword:
                     ble.s       .in_range
                     moveq       #0, d1
 .in_range:
-                    mulu.w      #FONT_GLYPH_BYTES, d1
+                    add.w       d1, d1                  ; *2 (word index)
+                    add.w       d1, d1                  ; *4 (long index)
+                    lea         glyph_offset_lut, a0
+                    move.l      0(a0,d1.w), d1          ; d1 = idx * FONT_GLYPH_BYTES
                     lea         font_bitmap, a0
                     adda.l      d1, a0
                     rts
@@ -364,26 +367,40 @@ ScrollShiftAndFill:
                     lea         scroll_next_pword, a4
                     adda.w      d4, a4                  ; a4 = scroll_next + offset
 
+                    ; Hoist source last-pword pointer (front_buffer Y=160 + byte 152).
+                    ; Advances per line; replaces per-line move+adda.
+                    move.l      a1, a5
+                    adda.w      #(SCREEN_VIS_PWORDS-1)*PWORD_BYTES, a5
+
                     move.w      #SCROLL_HEIGHT-1, d7
 .line:
-                    ; Bulk pword-shift target: 38 long copies, bytes 8..159 → 0..151
-                    move.l      a0, a3                  ; a3 = dst (= byte 0 of scanline)
+                    ; Bulk pword-shift target: 38 longs, bytes 8..159 → 0..151.
+                    ; 4 movem groups of 8 longs (32 bytes each) + 6 trailing move.l.
+                    move.l      a0, a3                  ; a3 = dst (= byte 0)
                     move.l      a0, a2
                     addq.l      #PWORD_BYTES, a2        ; a2 = src (= byte 8)
-                    rept        38
+
+                    movem.l     (a2)+, d0-d6/a6
+                    movem.l     d0-d6/a6, (a3)
+                    lea         32(a3), a3
+                    movem.l     (a2)+, d0-d6/a6
+                    movem.l     d0-d6/a6, (a3)
+                    lea         32(a3), a3
+                    movem.l     (a2)+, d0-d6/a6
+                    movem.l     d0-d6/a6, (a3)
+                    lea         32(a3), a3
+                    movem.l     (a2)+, d0-d6/a6
+                    movem.l     d0-d6/a6, (a3)
+                    lea         32(a3), a3
+                    rept        6
                     move.l      (a2)+, (a3)+
                     endr
-                    ; a3 now at byte 152 of target scanline (= pword 19 boundary)
+                    ; a3 at byte 152 (pword 19 start) — byte-fill target.
 
                     ; Byte-shift fill rightmost pword (pword 19):
                     ;   target byte 152 (P0 hi) <- source byte 153 (P0 lo)
                     ;   target byte 153 (P0 lo) <- scroll_next byte (offset+0)
-                    ;   target byte 154 (P1 hi) <- source byte 155 (P1 lo)
-                    ;   target byte 155 (P1 lo) <- scroll_next byte (offset+2)
-                    ;   ... same for P2, P3
-                    move.l      a1, a5
-                    adda.w      #(SCREEN_VIS_PWORDS-1)*PWORD_BYTES, a5   ; a5 = source pword 19 (= byte 152)
-
+                    ;   ... same for P1, P2, P3
                     move.b      1(a5), (a3)+
                     move.b      (a4), (a3)+
                     move.b      3(a5), (a3)+
@@ -393,9 +410,9 @@ ScrollShiftAndFill:
                     move.b      7(a5), (a3)+
                     move.b      6(a4), (a3)+
 
-                    ; Advance to next scanline (screen stride = 184 bytes)
+                    ; Advance to next scanline (a1 unused inside loop after hoist)
                     lea         SCREEN_LINE_BYTES(a0), a0
-                    lea         SCREEN_LINE_BYTES(a1), a1
+                    lea         SCREEN_LINE_BYTES(a5), a5
                     lea         8(a4), a4               ; scroll_next_pword stride = 8
                     dbra        d7, .line
                     rts
@@ -1045,6 +1062,29 @@ type1_traj_lut:
                     dc.w        19, 19, 20, 20, 20, 20, 20, 20, 20, 19
                     dc.w        19, 19, 18, 18, 17, 16, 15, 15, 14, 13
                     dc.w        12, 11, 10, 9, 7, 6, 5, 4, 3, 1
+
+; ----------------------------------------------------------------------------
+; glyph_offset_lut — replaces mulu.w #FONT_GLYPH_BYTES, d1 in fetch_next_char.
+; 64 entries × 4 bytes = 256 bytes. Entry i = i * FONT_GLYPH_BYTES (= 816).
+; ----------------------------------------------------------------------------
+                    even
+glyph_offset_lut:
+                    dc.l         0*FONT_GLYPH_BYTES,  1*FONT_GLYPH_BYTES,  2*FONT_GLYPH_BYTES,  3*FONT_GLYPH_BYTES
+                    dc.l         4*FONT_GLYPH_BYTES,  5*FONT_GLYPH_BYTES,  6*FONT_GLYPH_BYTES,  7*FONT_GLYPH_BYTES
+                    dc.l         8*FONT_GLYPH_BYTES,  9*FONT_GLYPH_BYTES, 10*FONT_GLYPH_BYTES, 11*FONT_GLYPH_BYTES
+                    dc.l        12*FONT_GLYPH_BYTES, 13*FONT_GLYPH_BYTES, 14*FONT_GLYPH_BYTES, 15*FONT_GLYPH_BYTES
+                    dc.l        16*FONT_GLYPH_BYTES, 17*FONT_GLYPH_BYTES, 18*FONT_GLYPH_BYTES, 19*FONT_GLYPH_BYTES
+                    dc.l        20*FONT_GLYPH_BYTES, 21*FONT_GLYPH_BYTES, 22*FONT_GLYPH_BYTES, 23*FONT_GLYPH_BYTES
+                    dc.l        24*FONT_GLYPH_BYTES, 25*FONT_GLYPH_BYTES, 26*FONT_GLYPH_BYTES, 27*FONT_GLYPH_BYTES
+                    dc.l        28*FONT_GLYPH_BYTES, 29*FONT_GLYPH_BYTES, 30*FONT_GLYPH_BYTES, 31*FONT_GLYPH_BYTES
+                    dc.l        32*FONT_GLYPH_BYTES, 33*FONT_GLYPH_BYTES, 34*FONT_GLYPH_BYTES, 35*FONT_GLYPH_BYTES
+                    dc.l        36*FONT_GLYPH_BYTES, 37*FONT_GLYPH_BYTES, 38*FONT_GLYPH_BYTES, 39*FONT_GLYPH_BYTES
+                    dc.l        40*FONT_GLYPH_BYTES, 41*FONT_GLYPH_BYTES, 42*FONT_GLYPH_BYTES, 43*FONT_GLYPH_BYTES
+                    dc.l        44*FONT_GLYPH_BYTES, 45*FONT_GLYPH_BYTES, 46*FONT_GLYPH_BYTES, 47*FONT_GLYPH_BYTES
+                    dc.l        48*FONT_GLYPH_BYTES, 49*FONT_GLYPH_BYTES, 50*FONT_GLYPH_BYTES, 51*FONT_GLYPH_BYTES
+                    dc.l        52*FONT_GLYPH_BYTES, 53*FONT_GLYPH_BYTES, 54*FONT_GLYPH_BYTES, 55*FONT_GLYPH_BYTES
+                    dc.l        56*FONT_GLYPH_BYTES, 57*FONT_GLYPH_BYTES, 58*FONT_GLYPH_BYTES, 59*FONT_GLYPH_BYTES
+                    dc.l        60*FONT_GLYPH_BYTES, 61*FONT_GLYPH_BYTES, 62*FONT_GLYPH_BYTES, 63*FONT_GLYPH_BYTES
 
 ; ----------------------------------------------------------------------------
 ; BSS
