@@ -887,17 +887,37 @@ ScrollPlotType6:
                     rts
 
 ; ----------------------------------------------------------------------------
-; ScrollPlotType7 — Diagonal same direction (2 rows)
+; ScrollPlotType7 — Two triangles + bottom row ("Real Effect 7")
 ;
-; 2 rows, both with linear Y offset increasing left-to-right. Creates a
-; diagonal wave where both rows tilt the same way.
-; (Will be replaced later with the triangle /\ + reflection \/ + bottom row.)
+; Three scrollers, same colors as effect 0:
+;   • Triangle 1 (/\): apex at top, legs slope down toward edges. At apex
+;     (strips 9-10) source line 0 lands at TYPE7_TRI_APEX_Y; at edges
+;     (strips 0/19) source line 0 is `depth` lines further down.
+;   • Triangle 2 (\/): apex at bottom, legs slope up toward edges. Mirror
+;     of triangle 1 across a horizontal line. Rendered upside-down (source
+;     line 33 lands at the TOP of triangle 2's dest extent), so the bottom
+;     of triangle 1's font touches the top of triangle 2's font at the
+;     center of the screen.
+;   • Bottom row: static horizontal scroller at SCROLL_Y_3 (= effect 0's
+;     row 3 position).
+;
+; Palette swap line for c2 is relocated to line 113 (between triangle 1's
+; apex bottom at Y=112 and triangle 2's apex top at Y=114), so:
+;   Y 78..113 → c1 (triangle 1)
+;   Y 114..159 → c2 (triangle 2)
+;   Y 160..193 → c3 (bottom row, default c3 swap at line 159)
+;
+; Geometry overlap at the edges (where the diverging legs each extend up to
+; 9 lines past their apex extent) is unavoidable with 34-line glyphs and
+; tip-touching at center; the rendered visual reflects this.
 ; ----------------------------------------------------------------------------
-TYPE7_ROW1_Y        equ     80                      ; row 1 base
-TYPE7_ROW2_Y        equ     145                     ; row 2 base
-TYPE7_SLOPE         equ     1                       ; lines per strip
+TYPE7_TRI_APEX_Y    equ     79                      ; triangle 1 src line 0 Y at apex (strips 9-10)
+TYPE7_TRI2_BOT_Y    equ     151                     ; triangle 2 src line 0 Y at apex (= dest bottom); 4 px gap from triangle 1
+TYPE7_BOT_ROW_Y     equ     SCROLL_Y_3              ; = 160
 
 ScrollPlotType7:
+                    bsr         ClearScrollerRegion
+
                     move.l      back_buffer_ptr, a5
                     move.l      scroll_plot_addr, a2
 
@@ -906,44 +926,71 @@ ScrollPlotType7:
 .strip:
                     move.w      #19, d0
                     sub.w       d6, d0
-                    move.w      d0, d5                  ; d5 = Y offset (0-19 lines)
+                    move.w      d0, d3                  ; d3 = strip s
+                    move.w      d0, d2
+                    add.w       d2, d2
+                    lea         type7_depth_lut, a4
+                    move.w      0(a4,d2.w), d5          ; d5 = depth at strip s (0..9)
 
-                    lsl.w       #3, d0                  ; * 8 bytes per pword
-                    lea         0(a2,d0.w), a0
+                    lsl.w       #3, d0                  ; d0 = strip * 8 (X byte offset)
+                    lea         0(a2,d0.w), a0          ; a0 = source pword
+                    move.l      a0, a6                  ; save source for the 3 plots
 
-                    ; Row 1: Y = base + offset (diagonal down-right)
-                    move.w      #TYPE7_ROW1_Y, d2
+                    ; --- Triangle 1 (/\) — forward render ---
+                    move.w      #TYPE7_TRI_APEX_Y, d2
                     add.w       d5, d2
                     mulu.w      #SCREEN_LINE_BYTES, d2
                     move.l      a5, a1
                     adda.l      d2, a1
                     adda.w      d0, a1
 
-                    ; Row 2: same direction diagonal
-                    move.w      #TYPE7_ROW2_Y, d2
-                    add.w       d5, d2
-                    mulu.w      #SCREEN_LINE_BYTES, d2
-                    move.l      a5, a3
-                    adda.l      d2, a3
-                    adda.w      d0, a3
-
                     move.w      #SCROLL_HEIGHT-1, d4
-.scanline:
-                    move.l      (a0), d1
-                    move.l      4(a0), d3
-
-                    move.l      d1, (a1)
-                    move.l      d3, 4(a1)
-                    move.l      d1, (a3)
-                    move.l      d3, 4(a3)
-
+.tri1_line:
+                    move.l      (a0), (a1)
+                    move.l      4(a0), 4(a1)
                     lea         SCROLL_BUFFER_LINE_BYTES(a0), a0
                     lea         SCREEN_LINE_BYTES(a1), a1
-                    lea         SCREEN_LINE_BYTES(a3), a3
-                    dbra        d4, .scanline
+                    dbra        d4, .tri1_line
+
+                    ; --- Triangle 2 (\/) — upside-down render ---
+                    move.l      a6, a0                  ; reset source
+                    move.w      #TYPE7_TRI2_BOT_Y, d2
+                    sub.w       d5, d2
+                    mulu.w      #SCREEN_LINE_BYTES, d2
+                    move.l      a5, a1
+                    adda.l      d2, a1
+                    adda.w      d0, a1
+
+                    move.w      #SCROLL_HEIGHT-1, d4
+.tri2_line:
+                    move.l      (a0), (a1)
+                    move.l      4(a0), 4(a1)
+                    lea         SCROLL_BUFFER_LINE_BYTES(a0), a0
+                    lea         -SCREEN_LINE_BYTES(a1), a1   ; backward dest
+                    dbra        d4, .tri2_line
+
+                    ; --- Bottom row (static) — forward render ---
+                    move.l      a6, a0
+                    move.l      a5, a1
+                    lea         (TYPE7_BOT_ROW_Y*SCREEN_LINE_BYTES)(a1), a1
+                    adda.w      d0, a1
+
+                    move.w      #SCROLL_HEIGHT-1, d4
+.bot_line:
+                    move.l      (a0), (a1)
+                    move.l      4(a0), 4(a1)
+                    lea         SCROLL_BUFFER_LINE_BYTES(a0), a0
+                    lea         SCREEN_LINE_BYTES(a1), a1
+                    dbra        d4, .bot_line
 
                     dbra        d6, .strip
                     rts
+
+                    even
+type7_depth_lut:
+                    dc.w        9, 8, 7, 6, 5, 4, 3, 2, 1, 0
+                    dc.w        0, 1, 2, 3, 4, 5, 6, 7, 8, 9
+
 
 ; ----------------------------------------------------------------------------
 ; ClearScrollerRegion — Clear screen area used by sine effects (lines 78-193)

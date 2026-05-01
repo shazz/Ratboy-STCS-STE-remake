@@ -196,7 +196,7 @@ PALETTE_SWAP_ENTRY  equ     77                      ; line 77 = just before SCRO
 ; Scroll effect type (change to test different effects):
 ;   0 = 3 fixed rows (default)
 ;   7 = sine wave (single row with vertical wobble)
-SCROLL_EFFECT_DEFAULT equ   6                       ; TEST: 8 px/VBL with simplest effect
+SCROLL_EFFECT_DEFAULT equ   7                       ; TEST: real effect 7 (triangle trajectory)
 
 ; ----------------------------------------------------------------------------
 ; Colors (ST-compatible palette values — $0rgb with 3 bits per channel,

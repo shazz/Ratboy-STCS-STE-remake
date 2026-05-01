@@ -18,35 +18,37 @@ Then rebuild and run:
 
 ## Common architecture
 
-All effects share the same per-VBL pipeline in `ScrollerStepVblank`
-(`src/scroller/engine.s`):
+Smooth **8 px/VBL** scroll via RATBOY's 1988 alternating-buffer trick — two
+scroll buffers `scroll_buffer_a` and `scroll_buffer_b` hold the same scroll
+content offset by 1 byte (= 8 px) horizontally. Display alternates each
+frame.
 
-1. `ScrollRenderNextPword` — emits one 16-pixel column into `scroll_buffer[20]`
-   (the off-screen staging slot) using a 5-phase blending cycle so glyphs
-   tile flush at 0px letter spacing.
-2. `ScrollShift` — shifts the whole 21-pword × 34-line buffer one pword left.
-3. `ScrollPlotDispatch` — hands off to the active effect's plot routine,
-   which reads `scroll_buffer[0..19]` and writes to one or more rows of the
-   back screen buffer.
+Per-VBL pipeline in `ScrollerStepVblank` (`src/scroller/engine.s`):
+
+1. `ScrollPlotDispatch` — hands off to the active effect's plot routine.
+   Plot routines read source from `scroll_plot_addr` (pointer to whichever
+   of `scroll_buffer_a` / `scroll_buffer_b` is active this frame) and write
+   to the back screen buffer.
+2. Toggle `scroll_active_buf` and update `scroll_plot_addr` to the other
+   buffer (= the one to display next frame).
+3. `ScrollRenderNextPword` — runs every other VBL (gated by
+   `scroll_byte_pending`). Writes a fresh 16-px pword into `scroll_next_pword`
+   (a 1-pword × 34-line staging area) using the 5-phase blending cycle.
+4. `ScrollShiftAndFill` — pword-shifts the new active buffer left by 1 pword
+   and fills its rightmost pword by byte-shifting between the just-displayed
+   buffer's rightmost pword and the relevant half (high or low bytes per
+   plane) of `scroll_next_pword`. ~40 sl/frame.
+5. Toggle `scroll_byte_pending`.
 
 `SwapBuffers` is then called from `MainLoop` to publish the frame.
 
-Effects can opt into **2× horizontal scroll speed** via `SetScrollSpeedExtra`,
-which causes `ScrollRenderNextPword + ScrollShift` to run twice per VBL.
+See `docs/LEARNINGS.md` "Smooth 8 px / VBL scrolling" for the full
+explanation of how this trick works.
 
-```asm
-SetScrollSpeedExtra:
-    cmp.w   #1, d0
-    beq.s   .fast      ; effect 1 = 2× speed
-    clr.w   scroll_speed_extra
-    rts
-.fast:
-    move.w  #1, scroll_speed_extra
-    rts
-```
-
-Add another `cmp.w #N / beq.s .fast` line here to enable 2× scroll for any
-future effect.
+**Per-effect palette swap line:** the c2 raster swap line is a runtime
+variable (`raster_swap_c2_addr`) so effects 4 (mirror) and 7 (triangles)
+can relocate it to align with their content boundaries. See
+`SetPalettePointers` in `src/hbl.s`.
 
 ---
 
@@ -270,27 +272,103 @@ everything else.
 
 ---
 
-## Effect 5 — 4× tall vertical stretch
+## Effect 5 — Static bottom scroller + diagonal interleaved overlay
 
-A single centred row where each source scanline is written 4 times to
-consecutive dest lines (4× zoom). 25 of the 34 source lines are plotted to
-fit within the screen (25 × 4 = 100 dest lines). No sine, no slope, no
-clearing.
+Two scrollers stacked: a static horizontal one at the bottom (same Y as
+effect 0's row 3), and a 1-line-interleaved diagonal overlay sloping from
+top-left to bottom-right whose bottom-right corner lands at the mid-height
+of the bottom scroller. `ClearScrollerRegion` runs each frame to keep the
+interleave gaps black.
 
-> Note: this is a placeholder until "real effect 5" is decided.
+### Configuration
+
+| Knob                         | Where                                       | Current value | What it does                              |
+| ---------------------------- | ------------------------------------------- | ------------- | ----------------------------------------- |
+| Bottom scroller Y            | `src/scroller/engine.s` `TYPE5_BOT_Y`       | `SCROLL_Y_3` (160) | static row position                  |
+| Top scroller right anchor    | `src/scroller/engine.s` `TYPE5_TOP_RIGHT_Y` | 176           | Y of top scroller's source line 33 at strip 19 |
+| Top scroller base Y          | `src/scroller/engine.s` `TYPE5_TOP_BASE_Y`  | 82            | derived from right anchor + slope         |
+| Top scroller slope           | hardcoded `+ s + s/2` in plot               | 1.5 line/strip | tilt rate                                |
+
+To **change the slope**, edit the lines `add.w d3, d2` + `move.w d3, d5;
+lsr.w #1, d5; add.w d5, d2` in the top-scroller plot (currently produces
+`s + s/2`). For 1 line/strip (less steep), drop the `s/2` adjustment.
+
+### Routine
+
+`ScrollPlotType5` — clears the scroller region, then for each of 20 strips:
+plots the bottom scroller forward (34 lines), then plots the top scroller
+forward with `2× SCREEN_LINE_BYTES` dest stride (= 1 written + 1 gap line)
+at a Y offset depending on the strip index.
+
+---
+
+## Effect 6 — 2 fixed horizontal rows
+
+The simplest effect: two static horizontal rows. Two-row variant of
+effect 0.
 
 ### Configuration
 
 | Knob               | Where                                   | Current value | What it does                              |
 | ------------------ | --------------------------------------- | ------------- | ----------------------------------------- |
-| Row Y position     | `src/scroller/engine.s` `TYPE5_ROW_Y`   | 90            | Y of the first dest line                  |
-| Source lines used  | `src/scroller/engine.s` `TYPE5_SRC_LINES` | 25         | how many of the 34 glyph lines to render  |
-
-To change the zoom factor, edit the unrolled writes inside `.scanline`
-(currently `move.l … 0/+184/+368/+552`) and the `lea SCREEN_LINE_BYTES*N(a1), a1`
-that advances dest by `N` lines.
+| Row 1 Y            | `src/scroller/engine.s` `TYPE6_ROW1_Y`  | 78            | top row Y                                 |
+| Row 2 Y            | `src/scroller/engine.s` `TYPE6_ROW2_Y`  | 119           | bottom row Y                              |
 
 ### Routine
 
-`ScrollPlotType5` — for each of 20 strips: copies 25 source lines, writing
-each one to 4 consecutive screen lines (`SCREEN_LINE_BYTES*0..3`).
+`ScrollPlotType6` — copies `scroll_buffer[0..19]` to two screen rows using
+2-way `movem.l` fan-out. Multi-row palette (c1 / c2 via raster swap at
+default lines 77 / 118).
+
+---
+
+## Effect 7 — Triangle trajectories + bottom row ("Real Effect 7")
+
+Three scrollers, same colours as effect 0:
+
+* **Triangle 1** (`/\` trajectory): the scroller's Y traces a downward V
+  across the 20 strips — apex (highest on screen, lowest Y) at strips 9-10,
+  legs slope down toward the edges. Forward render. → c1 palette.
+* **Triangle 2** (`\/` trajectory, upside-down letters): the scroller's Y
+  traces an upward V — apex (lowest on screen, highest Y) at strips 9-10,
+  legs slope up toward the edges. Source rendered upside-down so triangle 1's
+  font bottom touches triangle 2's font top at the apex. → c2 palette.
+* **Bottom row**: static horizontal at `SCROLL_Y_3` (= effect 0's row 3 Y).
+  → c3 palette.
+
+The c2 raster swap line is moved to line 117 for type 7 (between the two
+triangle apexes); c1 / c3 swaps stay at the default lines 77 / 159.
+
+### Configuration
+
+| Knob                  | Where                                       | Current value | What it does                                      |
+| --------------------- | ------------------------------------------- | ------------- | ------------------------------------------------- |
+| Triangle 1 apex Y     | `src/scroller/engine.s` `TYPE7_TRI_APEX_Y`  | 79            | source line 0 Y at strips 9-10 (= apex)           |
+| Triangle 2 bottom Y   | `src/scroller/engine.s` `TYPE7_TRI2_BOT_Y`  | 151           | source line 0 Y in dest at apex (= dest bottom)   |
+| Bottom row Y          | `src/scroller/engine.s` `TYPE7_BOT_ROW_Y`   | `SCROLL_Y_3` (160) | static row position                          |
+| Trajectory depth LUT  | `src/scroller/engine.s` `type7_depth_lut`   | 9..0..0..9    | per-strip Y delta from apex                       |
+| Triangle 1 → c2 swap  | `src/hbl.s` `RASTER_SWAP_C2_TYPE7`          | line 117      | moves c2 swap so triangle 2 starts in c2          |
+
+To **change the trajectory steepness**, edit `type7_depth_lut`. Default
+shape is `9, 8, …, 1, 0, 0, 1, …, 8, 9` (max depth 9 at edges, slope 1
+line/strip). Halve all values for half-slope (max depth ~4).
+
+To **adjust the gap between triangle 1 and triangle 2**, change
+`TYPE7_TRI2_BOT_Y` and the matching `RASTER_SWAP_C2_TYPE7` line in lockstep
+(swap line ≈ triangle 2 apex top Y − 1).
+
+### Routine
+
+`ScrollPlotType7` — clears the scroller region, then for each of 20 strips:
+
+1. Looks up `depth(s)` from `type7_depth_lut`.
+2. Plots triangle 1 at `Y_top = TYPE7_TRI_APEX_Y + depth` (forward render,
+   34 lines).
+3. Plots triangle 2 starting at dest `Y_bottom = TYPE7_TRI2_BOT_Y - depth`
+   and walking *up* (= upside-down letters), 34 lines.
+4. Plots the static bottom row at `TYPE7_BOT_ROW_Y` forward, 34 lines.
+
+Edges geometrically overlap (full-height glyphs + diverging legs touching
+at the centre is a topology problem) — letters at strips 0 / 19 visibly
+cross. Adjust `TYPE7_TRI2_BOT_Y` and the depth LUT amplitude to trade off
+overlap vs centre tip-touch tightness.

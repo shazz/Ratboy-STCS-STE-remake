@@ -86,6 +86,7 @@ RASTER_SKIP_END         equ     raster_table+112*2      ; scanline 112 (exclusiv
 RASTER_SWAP_C1          equ     raster_table+77*2       ; before row 1 (Y=78)
 RASTER_SWAP_C2_DEFAULT  equ     raster_table+118*2      ; multi-row layout (Y=119)
 RASTER_SWAP_C2_TYPE4    equ     raster_table+131*2      ; mirror line (Y=132)
+RASTER_SWAP_C2_TYPE7    equ     raster_table+117*2      ; between triangle 1 and triangle 2 (Y=118)
 RASTER_SWAP_C3          equ     raster_table+159*2      ; before row 3 (Y=160)
 
 TimerBHandler:
@@ -164,6 +165,8 @@ SetPalettePointers:
 
                     cmp.w       #4, d0
                     beq.s       .type_4_mirror
+                    cmp.w       #7, d0
+                    beq.s       .type_7_triangles
                     cmp.w       #1, d0
                     beq.s       .single_row
                     cmp.w       #2, d0
@@ -173,7 +176,7 @@ SetPalettePointers:
                     cmp.w       #5, d0
                     beq.s       .single_row             ; Type 5 (4× tall stretch) uses single palette
 
-                    ; Multi-row (0, 6, 7): c1, c2, c3
+                    ; Multi-row (0, 6): c1, c2, c3
                     lea         font_palette_c2, a0
                     move.l      a0, font_pal_ptr2
                     lea         font_palette_c3, a0
@@ -196,6 +199,17 @@ SetPalettePointers:
                     move.l      a0, font_pal_ptr2
                     move.l      a0, font_pal_ptr3
                     move.l      #RASTER_SWAP_C2_TYPE4, raster_swap_c2_addr
+                    rts
+
+.type_7_triangles:
+                    ; Triangle 1 = c1, Triangle 2 = c2, Bottom row = c3.
+                    ; C2 swap relocated to line 113 (between the apexes of
+                    ; the two triangles); C3 swap stays at line 159.
+                    lea         font_palette_c2, a0
+                    move.l      a0, font_pal_ptr2
+                    lea         font_palette_c3, a0
+                    move.l      a0, font_pal_ptr3
+                    move.l      #RASTER_SWAP_C2_TYPE7, raster_swap_c2_addr
                     rts
 
 ; ----------------------------------------------------------------------------
