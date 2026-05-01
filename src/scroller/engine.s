@@ -113,6 +113,7 @@ ScrollerStepVblank:
                     ; Render new pword into scroll_next_pword every other VBL
                     tst.w       scroll_byte_pending
                     bne.s       .no_render
+                    PROFILE_COLOR $0F00                 ; RED = render
                     movem.l     a0/a1, -(sp)
                     bsr         ScrollRenderNextPword
                     movem.l     (sp)+, a0/a1
@@ -120,10 +121,14 @@ ScrollerStepVblank:
                     move.w      scroll_byte_pending, d4 ; 0 or 1 = byte offset
 
                     ; SHIFT FIRST (like CONFO.S scrolg)
+                    PROFILE_COLOR $00F0                 ; GREEN = shift
                     bsr         ScrollShiftAndFill
 
                     ; THEN COPY (like CONFO.S scroh) — rows 1&2 get the shifted data
+                    PROFILE_COLOR $000F                 ; BLUE = plot
                     bsr         ScrollPlotDispatch
+
+                    PROFILE_COLOR $0000                 ; BLACK = done (idle)
 
                     ; Toggle byte_pending for next VBL
                     move.w      scroll_byte_pending, d0

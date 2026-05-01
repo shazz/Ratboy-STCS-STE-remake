@@ -71,6 +71,16 @@ SCROLLER_ENABLED    equ     1
 ; the screen displays in LOGO palette only, no gradient — useful to test
 ; whether per-scanline ISR activity is interacting with the scroller.
 RASTER_ENABLED      equ     1
+; 1 = profile mode: ScrollerStepVblank writes color 0 at section boundaries
+; so each section appears as a colored horizontal band on screen. Width of
+; band = scanlines that section took. REQUIRES RASTER_ENABLED=0 (otherwise
+; Timer-B overwrites color 0 every line). Recommend MUSIC_ENABLED=0 too
+; to remove music ISR noise from the timing.
+;   Black = idle (work complete)
+;   Red   = ScrollRenderNextPword (every other VBL)
+;   Green = ScrollShiftAndFill
+;   Blue  = ScrollPlotDispatch
+PROFILE_ENABLED     equ     0
 
 ; ----------------------------------------------------------------------------
 ; Trap numbers

@@ -26,3 +26,16 @@ WAIT_VBL            macro
 SET_COLOR           macro
                     move.w      #\2, SHIFTER_PALETTE+(\1)*2
                     endm
+
+; ----------------------------------------------------------------------------
+; PROFILE_COLOR — write color 0 immediate, gated on PROFILE_ENABLED.
+;   \1 = $0rgb immediate
+; Used to mark section boundaries in ScrollerStepVblank for cycle profiling.
+; The colored band on screen spans the scanlines that section took.
+; No clobbers.
+; ----------------------------------------------------------------------------
+PROFILE_COLOR       macro
+                    ifne        PROFILE_ENABLED
+                    move.w      #\1, SHIFTER_PALETTE
+                    endif
+                    endm
