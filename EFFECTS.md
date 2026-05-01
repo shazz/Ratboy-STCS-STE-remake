@@ -135,6 +135,104 @@ skip the swap overrides.
 
 ---
 
+## Sequencing effects via the scroll text
+
+The scroller engine looks for effect-change markers embedded directly in
+the scroll text. This means the entire timeline (which effect plays for
+how long) is just the layout of the bytes in `src/data/scrolltext.s` —
+no separate timeline data structure, no frame counter, no "scene"
+manager.
+
+### Marker bytes
+
+| Byte    | Meaning                           |
+| ------- | --------------------------------- |
+| `0`     | NULL — wrap cursor back to start  |
+| `1..8`  | Effect-change marker (= effect N-1) |
+| `9..31` | Reserved (treated as glyph index 0 = space) |
+| `32..95`| Printable ASCII glyph              |
+| `96+`   | Out of range, clamped to space     |
+
+Effect N-1 means: byte `1` → effect 0, byte `2` → effect 1, ..., byte
+`8` → effect 7. The original RATBOY 1988 code used bytes 1..7 directly
+as effects 1..7 (no effect 0); we extended the range to byte 8 so all
+8 of our effects are addressable.
+
+### How it parses
+
+`ScrollRenderNextPword .fetch_next_char` (`src/scroller/engine.s`) reads
+one byte from the cursor each fetch. If the byte is in `1..8`, the
+parser:
+
+1. Sets `scroll_effect_type = byte − 1`.
+2. Calls `SetPalettePointers` so the new effect's palette pointers and
+   c1/c2 raster-swap addresses take effect immediately.
+3. Loops back to read the next byte (which is the actual glyph or
+   another marker).
+
+Markers are never rendered as glyphs — they're consumed and skipped.
+You can chain markers (e.g. `byte 1, byte 5`) to cycle without any text
+between, though that's rarely useful.
+
+### Authoring a sequence
+
+In `src/data/scrolltext.s`, write segments back-to-back, each prefixed
+with its effect-change byte:
+
+```asm
+scrolltext_S1:
+    ; --- segment 1: effect 0 ---
+    dc.b    1
+    dc.b    "              FIRST SEGMENT TEXT HERE...                  "
+
+    ; --- segment 2: effect 3 ---
+    dc.b    4
+    dc.b    "           SECOND SEGMENT (RUNS UNDER EFFECT 3)...        "
+
+    ; --- segment 3: effect 7 ---
+    dc.b    8
+    dc.b    "        THIRD SEGMENT (RUNS UNDER EFFECT 7)...            "
+
+    dc.b    0                       ; NULL → wrap back to scrolltext_S1
+    even
+```
+
+A few practical rules:
+
+* **Start with a marker.** The cursor wraps to position 0 of
+  `scrolltext_S1` after each NULL, so the first byte should be a marker
+  to put the engine in a known effect on the loop's first VBL. If you
+  don't, the loop will keep whatever effect was active when the NULL
+  was reached.
+* **Match `SCROLL_EFFECT_DEFAULT`** to the first marker. The engine
+  initialises `scroll_effect_type` to `SCROLL_EFFECT_DEFAULT` *before*
+  the first character is fetched, so for one VBL the effect can differ
+  from what the marker about to be read says. Setting them equal keeps
+  init clean.
+* **Trailing padding.** When a marker fires, the *next* effect plot
+  starts immediately, but the scroll buffer still has 21 pwords of
+  previous-segment content scrolling out under the new effect. Long
+  trailing spaces (the original 1988 padding pattern is `"...  "` with
+  20–40 trailing spaces) let one segment fully exit before the next
+  segment's text enters.
+* **Order is yours.** No constraint that effects appear in numeric
+  order. The original CONFO.S used `6, 1, 2, 7, 3, 4, 5` (no effect
+  0). Our default ordering is `0, 1, 2, …, 7` purely for clarity.
+* **Apostrophes and punctuation** must be in the font's printable
+  range (ASCII 32..95). Lowercase letters are *not* in our font and
+  will render as garbage glyphs.
+
+### Visual lag
+
+A marker fires when the cursor passes it, but the scroll content
+already in the buffer (= last ~21 pwords ≈ 7 characters of preceding
+text) keeps scrolling for a few VBLs after the effect changes. The
+result: the new effect "captures" the tail of the previous segment as
+it exits the screen. This is the original 1988 behaviour and tends to
+look like a smooth visual transition rather than a jarring cut.
+
+---
+
 ## Effect 0 — Three fixed rows
 
 The classic 3-row look: same scroll text drawn at three vertical positions,

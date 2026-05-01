@@ -200,16 +200,43 @@ ScrollRenderNextPword:
                     clr.w       scroll_render_phase
                     rts
 
-; --- .fetch_next_char: read next char from text, return glyph ptr in a0 ---
+; --- .fetch_next_char: read next char from text, return glyph ptr in a0
+;
+; In-text effect-change markers: bytes 1..8 are interpreted as effect
+; markers, where byte N = scroll_effect_type (N-1). The marker byte is
+; consumed (does not produce a glyph) and SetPalettePointers is called
+; so palette and raster-swap addresses follow the effect change. The
+; loop repeats until a non-marker byte is found.
+;
+; Byte 0 = NULL terminator → wrap cursor back to scrolltext_S1.
+; Bytes 1..8 = effect markers (= effects 0..7).
+; Bytes 9..31 = unused; clamped to glyph index 0 (space) below.
+; Bytes 32..95 = printable ASCII (space..underscore).
+; Bytes 96+ = clamped to space (out of font range).
 .fetch_next_char:
                     move.l      scroll_text_cursor, a0
+.fetch_loop:
+                    moveq       #0, d1
                     move.b      (a0)+, d1
-                    bne.s       .got_char
+                    bne.s       .check_marker
                     lea         scrolltext_S1, a0
                     move.b      (a0)+, d1
+.check_marker:
+                    cmp.b       #1, d1
+                    blt.s       .got_char           ; (defensive; d1=0 already wrapped)
+                    cmp.b       #8, d1
+                    bhi.s       .got_char           ; not a marker → it's a glyph byte
+                    ; Effect-change marker: byte N → effect (N-1)
+                    moveq       #0, d0
+                    move.b      d1, d0
+                    subq.w      #1, d0              ; d0 = new effect type
+                    move.w      d0, scroll_effect_type
+                    move.l      a0, -(sp)
+                    bsr         SetPalettePointers
+                    move.l      (sp)+, a0
+                    bra.s       .fetch_loop
 .got_char:
                     move.l      a0, scroll_text_cursor
-                    and.w       #$00FF, d1
                     sub.w       #FONT_FIRST_ASCII, d1
                     bpl.s       .range_ok
                     moveq       #0, d1

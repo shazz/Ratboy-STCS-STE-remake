@@ -193,10 +193,11 @@ FONT_FIRST_ASCII    equ     32                      ; glyph 0 = space
 ; top scroll row.
 PALETTE_SWAP_ENTRY  equ     77                      ; line 77 = just before SCROLL_Y_1 (78)
 
-; Scroll effect type (change to test different effects):
-;   0 = 3 fixed rows (default)
-;   7 = sine wave (single row with vertical wobble)
-SCROLL_EFFECT_DEFAULT equ   7                       ; TEST: real effect 7 (triangle trajectory)
+; Scroll effect type — initial value before the first in-text marker fires.
+; Bytes 1..8 in the scrolltext switch the active effect (= effects 0..7);
+; the merged scrolltext starts with byte 1 → effect 0 — keep this matching
+; for clean boot, or set to any 0..7 to start mid-cycle.
+SCROLL_EFFECT_DEFAULT equ   0
 
 ; ----------------------------------------------------------------------------
 ; Colors (ST-compatible palette values — $0rgb with 3 bits per channel,

@@ -1,8 +1,8 @@
 # Stargoose Cracktro STE — Session Status
 
-Last updated: 2026-04-30, session 5c — all 8 effects complete + 8 px/VBL scroll
+Last updated: 2026-04-30, session 5c — full intro feature-complete
 
-## Session 5c — RATBOY's smooth-scroll trick + Real Effect 7
+## Session 5c — RATBOY's smooth-scroll trick + Real Effect 7 + sequencer
 
 **Highlights:**
 
@@ -23,6 +23,14 @@ Last updated: 2026-04-30, session 5c — all 8 effects complete + 8 px/VBL scrol
    with letters meeting tip-to-tip at the centre + static bottom row.
    Per-effect c1 swap moved 4 lines higher (line 73 → c1 from Y=74) for
    triangle 1 headroom; c2 swap at line 121 between the apexes.
+
+4. **Effect sequencer (P7) wired** — same trick as the original 1988
+   code: bytes 1..8 embedded in the scroll text are effect-change
+   markers (= effects 0..7); the parser consumes them, calls
+   `SetPalettePointers`, and continues fetching. `src/data/scrolltext.s`
+   now holds the full RATBOY 1988 sequence (text segments S1..S8 from
+   the JS port, see `js_version/main.html`) cycling through all 8
+   effects. After NULL wrap → loop back to effect 0.
 
 | Type | Effect | Status |
 |------|--------|--------|
@@ -109,15 +117,17 @@ docs/LEARNINGS.md     accumulated learnings; "Smooth 8 px / VBL" explains the
 
 ## Remaining work
 
-* **Effect sequencer (P7)** — switch effects via embedded bytes in scroll
-  text. The original CONFO.S checks for `<8` bytes in the text stream
-  and writes them to the `type` variable. We have 8 effects ready;
-  the dispatcher already routes by `scroll_effect_type`, just need
-  to advance `scroll_effect_type` when the text cursor hits a marker.
-* **Restore the original scrolltext** (currently the diagnostic dense
-  ABCDEF…0123456789… pattern is in `src/data/scrolltext.s`).
 * **Music re-enable + verify** (currently `MUSIC_ENABLED=1`, but worth
   retesting after the recent changes).
+* **Polish pass** — startup glitch on first ~4 VBLs while the dual buffer
+  pipeline fills (one rightmost-pword anomaly that scrolls off after
+  ~ 1 second of run time). Could be hidden by running the shift+fill a
+  few times during init.
+* **Edge overlap on type 7** — the diverging legs of the two triangles
+  geometrically overlap at strips 0/19 because each glyph is 34 lines
+  tall. Visually the c2 letters bleed through c1 in the overlap band.
+  Could be shortened by either reducing slope or tweaking
+  `RASTER_SWAP_C2_TYPE7` to cover the worst-case extent.
 
 ## Phase progress
 
@@ -125,7 +135,7 @@ docs/LEARNINGS.md     accumulated learnings; "Smooth 8 px / VBL" explains the
 |-------|--------|
 | P0–P5 | ✅ done |
 | P6 — Mode A (3 parallel rows) | ✅ done |
-| P6b — All 8 scroll effects | ✅ done (this session) |
-| P6c — 8 px/VBL smooth scroll | ✅ done (this session) |
-| P7 — Effect sequencer | ⬜ pending |
-| P8 — Original scrolltext + music polish | ⬜ pending |
+| P6b — All 8 scroll effects | ✅ done |
+| P6c — 8 px/VBL smooth scroll | ✅ done |
+| P7 — Effect sequencer (in-text markers) | ✅ done |
+| P8 — Original scrolltext + music polish | ✅ scrolltext done |
