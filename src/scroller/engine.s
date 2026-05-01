@@ -912,7 +912,7 @@ ScrollPlotType6:
 ; tip-touching at center; the rendered visual reflects this.
 ; ----------------------------------------------------------------------------
 TYPE7_TRI_APEX_Y    equ     79                      ; triangle 1 src line 0 Y at apex (strips 9-10)
-TYPE7_TRI2_BOT_Y    equ     151                     ; triangle 2 src line 0 Y at apex (= dest bottom); 4 px gap from triangle 1
+TYPE7_TRI2_BOT_Y    equ     155                     ; triangle 2 src line 0 Y at apex (= dest bottom)
 TYPE7_BOT_ROW_Y     equ     SCROLL_Y_3              ; = 160
 
 ScrollPlotType7:
@@ -987,9 +987,12 @@ ScrollPlotType7:
                     rts
 
                     even
+; /\ + \/ trajectory: depth 13 at edges. Triangle 1 at strip 0 lands at
+; Y=79+13=92 (4 px lower than slope-1, 4 px higher than slope-1.89).
+; Symmetric, ~13/9 ≈ 1.44 lines per strip.
 type7_depth_lut:
-                    dc.w        9, 8, 7, 6, 5, 4, 3, 2, 1, 0
-                    dc.w        0, 1, 2, 3, 4, 5, 6, 7, 8, 9
+                    dc.w        13, 12, 10, 9, 7, 6, 4, 3, 1, 0
+                    dc.w        0, 1, 3, 4, 6, 7, 9, 10, 12, 13
 
 
 ; ----------------------------------------------------------------------------

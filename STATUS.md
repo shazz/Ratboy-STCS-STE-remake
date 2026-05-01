@@ -1,105 +1,131 @@
 # Stargoose Cracktro STE — Session Status
 
-Last updated: 2026-04-29, session 5 continued
+Last updated: 2026-04-30, session 5c — all 8 effects complete + 8 px/VBL scroll
 
-## Session 5b — SPACING + EFFECTS REFINED (2026-04-29)
+## Session 5c — RATBOY's smooth-scroll trick + Real Effect 7
 
-**Major improvements this session:**
+**Highlights:**
 
-1. **0px letter spacing** via 5-phase glyph blending — characters now render tight (40px each) instead of 48px with 8px gaps
+1. **Smooth 8 px/VBL horizontal scroll** matching the 1988 STF original.
+   Replaces the chunky 16 px/VBL pword shift with RATBOY's
+   alternating-buffer trick — two scroll buffers `scroll_buffer_a` and
+   `scroll_buffer_b` hold the same content offset by 1 byte (= 8 px),
+   display alternates each frame, only ~40 sl/frame of shift work.
+   See `docs/LEARNINGS.md` "Smooth 8 px / VBL scrolling" for the
+   full explanation.
 
-2. **Per-row palette pointers** — ISR uses indirect pointers (no conditionals in hot path), effects configure which palettes to use
+2. **Per-effect palette swap lines.** `raster_swap_c1_addr` and
+   `raster_swap_c2_addr` are now runtime variables in `hbl.s` — each
+   effect can relocate its palette boundaries to align with its content.
+   See `EFFECTS.md` "Tuning palette swap lines per effect".
 
-3. **Type 2 rewritten as water reflection effect:**
-   - Scroller with 10-line diagonal slope (down from right to left)
-   - Mirrored reflection below with 1-line interleaving
-   - Single palette for unified look
-   - Matches original CONFO.S behavior
-
-4. **Screen clearing** for moving effects (Type 1, 2) — ClearScrollerRegion clears lines 70-199
+3. **Real Effect 7 implemented:** triangle-trajectory pair (/\\ and \\/)
+   with letters meeting tip-to-tip at the centre + static bottom row.
+   Per-effect c1 swap moved 4 lines higher (line 73 → c1 from Y=74) for
+   triangle 1 headroom; c2 swap at line 121 between the apexes.
 
 | Type | Effect | Status |
 |------|--------|--------|
-| 0 | 3 fixed rows | ✅ tested |
-| 1 | 2× tall + sine | ✅ tested |
-| 2 | Water reflection | ✅ tested (rewritten this session) |
-| 3 | Diagonal same | pending test |
-| 4 | 4× tall spread | pending test |
-| 5 | Converging (bulge) | pending test |
-| 6 | 2 fixed rows | pending test |
-| 7 | Sine wave | pending test |
+| 0 | 3 fixed rows | ✅ |
+| 1 | 2× tall + sine bob + per-strip deformation | ✅ |
+| 2 | Water reflection (diagonal scroller + interleaved mirror) | ✅ |
+| 3 | Sine wave + 1-line interleave + frame clearing | ✅ |
+| 4 | Mirror diagonals across symmetry line + palette swap | ✅ |
+| 5 | Static bottom + diagonal interleaved overlay | ✅ |
+| 6 | 2 fixed rows | ✅ |
+| 7 | Triangle trajectories (/\\ + \\/) + bottom row | ✅ |
 
-**To test an effect:** change `SCROLL_EFFECT_DEFAULT` in `src/constants.s` (currently set to 2).
-
----
-
-## Architecture Updates
-
-**Glyph blending (5-phase cycle per 2 characters):**
-- Phase 0-1: direct copy of char A pwords 0-1
-- Phase 2: blend A[32-39] + B[0-7] (high bytes)
-- Phase 3-4: blend B's remaining pixels
-- Result: 40px glyphs with 0px gaps
-
-**Palette pointer system:**
-- `font_pal_ptr1/2/3` — set by `SetPalettePointers(effect_type)`
-- Single-row effects (1, 2, 4, 7): all point to c1
-- Multi-row effects (0, 3, 5, 6): point to c1/c2/c3
-
-**Clear region:** Extended to 70-199 (129 lines) to cover all effect positions
+**To select an effect:** change `SCROLL_EFFECT_DEFAULT` in
+`src/constants.s` and rebuild.
 
 ---
 
-## Session 4 — GLITCH FIXED (2026-04-29)
+## Architecture (current)
 
-Row-1 Y=107-111 glitch root cause: bus collision between Timer-B palette write and Shifter DMA fetch. Fix: skip palette write for scanlines 107-111.
+**8 px/VBL alternating-buffer scroll:**
 
----
+* `scroll_buffer_a`, `scroll_buffer_b` (21 pwords × 34 lines each) hold
+  the scroll content at offsets differing by 1 byte horizontally.
+* `scroll_active_buf` flips each VBL; `scroll_plot_addr` points at the
+  buffer plot routines should read from this frame.
+* `scroll_next_pword` (1 pword × 34 lines) is the renderer's staging
+  area, refilled every other VBL by the 5-phase glyph blender.
+* `ScrollShiftAndFill` does a pword-shift on the just-flipped-active
+  buffer plus a per-plane byte-shift fill on its rightmost pword,
+  combining `scroll_other_buf[19]`'s low bytes with one half of
+  `scroll_next_pword` (selected by `scroll_byte_pending`).
+* `scroll_byte_pending` toggles each VBL: 0 → render this frame + use
+  `scroll_next_pword` high bytes; 1 → no render, use low bytes.
 
-## Current Architecture
+**Per-effect palette swap lines** (runtime-configurable in `hbl.s`):
 
-**Strategy E (pure CPU)** + **double-buffer**:
-- Off-screen `scroll_buffer` (21 pwords × 34 lines)
-- Per-VBL: render new pword → CPU shift buffer left → CPU plot to screen rows
-- Plot via effect dispatcher — each effect implements its own row layout
-- Timer-B raster gradient runs independently, scanline-locked
+* `RASTER_SWAP_C1_DEFAULT` (line 77, c1 from Y=78) — used by all effects
+  except 7.
+* `RASTER_SWAP_C1_TYPE7` (line 73, c1 from Y=74).
+* `RASTER_SWAP_C2_DEFAULT` (line 118, c2 from Y=119) — multi-row
+  default.
+* `RASTER_SWAP_C2_TYPE4` (line 131, c2 from Y=132) — type 4 mirror line.
+* `RASTER_SWAP_C2_TYPE7` (line 121, c2 from Y=122) — type 7 between
+  triangle apexes.
+* `RASTER_SWAP_C3` (line 159, c3 from Y=160) — fixed for all effects.
+
+**Strategy E (pure CPU)** + **double-buffer** for the screen pages:
+
+* Off-screen scroll buffers in RAM (not on screen, unlike the original).
+* Per-VBL: render new pword into `scroll_next_pword` (every other VBL) →
+  ScrollShiftAndFill on inactive buffer → plot from active buffer to
+  back screen → swap front/back screen pages.
+* Plot routines read from `scroll_plot_addr` (one of the two scroll
+  buffers, alternating).
 
 ## File map
 
 ```
 src/
   main.s              entry; Main, MainLoop, CheckEsc
-  constants.s         SCROLL_EFFECT_DEFAULT selects active effect (0-7)
-  scroller/engine.s   5-phase blending + effect dispatcher + 8 plot routines
+  constants.s         SCROLL_EFFECT_DEFAULT selects active effect (0..7)
+  scroller/engine.s   render + ShiftAndFill + 8 effect plot routines
                       ClearScrollerRegion for moving effects
-  hbl.s               Timer-B handler + SetPalettePointers + palette pointers
+                      type1_traj_lut, type1_inside_lut, type7_depth_lut
+  hbl.s               Timer-B handler + SetPalettePointers
+                      raster_swap_c1_addr, raster_swap_c2_addr (BSS, per-effect)
   screen.s            Double-buffer setup
   vbl.s               VBL handler calls ScrollerStepVblank
   data/
-    scrolltext.s      Text sequences
+    scrolltext.s      Text sequences (currently the diagnostic dense pattern)
     font.s            font.bin + c1/c2/c3 palettes
     gradient.s        raster_table
+EFFECTS.md            per-effect configuration guide + palette swap tuning
+docs/LEARNINGS.md     accumulated learnings; "Smooth 8 px / VBL" explains the
+                      RATBOY trick we ported from CONFO.S
 ```
 
 ## How to resume next session
 
-1. Read this file + `docs/LEARNINGS.md`
-2. Test effects by changing `SCROLL_EFFECT_DEFAULT` in `src/constants.s`
-3. Build: `/home/matt/projects/MJJ/bin/vasm/vasmm68k_mot -Ftos -quiet -spaces -I src -I . -o build/AUTO/STRGOOSE.PRG src/main.s`
-4. Run: `hatari --machine ste --tos bin/hatari/TOS/tos162fr.img --harddrive build --fast-boot on`
+1. Read this file + `EFFECTS.md` + `docs/LEARNINGS.md`.
+2. Pick effect via `SCROLL_EFFECT_DEFAULT` in `src/constants.s`.
+3. Build: `/home/matt/projects/MJJ/bin/vasm/vasmm68k_mot -Ftos -quiet -spaces -I src -I . -o build/AUTO/STRGOOSE.PRG src/main.s`.
+4. Run: `./run.sh` (Hatari STE, mounts `build/` as C:, AUTO-runs the PRG).
 
 ## Remaining work
 
-- **Test remaining effects** (3, 4, 5, 6, 7)
-- **Effect sequencer** — switch effects via bytes in scroll text (P7)
-- **Restore original scrolltext**
-- **Re-enable music** (MUSIC_ENABLED=1)
+* **Effect sequencer (P7)** — switch effects via embedded bytes in scroll
+  text. The original CONFO.S checks for `<8` bytes in the text stream
+  and writes them to the `type` variable. We have 8 effects ready;
+  the dispatcher already routes by `scroll_effect_type`, just need
+  to advance `scroll_effect_type` when the text cursor hits a marker.
+* **Restore the original scrolltext** (currently the diagnostic dense
+  ABCDEF…0123456789… pattern is in `src/data/scrolltext.s`).
+* **Music re-enable + verify** (currently `MUSIC_ENABLED=1`, but worth
+  retesting after the recent changes).
 
 ## Phase progress
 
 | Phase | Status |
 |-------|--------|
-| P0-P5 | ✅ done |
+| P0–P5 | ✅ done |
 | P6 — Mode A (3 parallel rows) | ✅ done |
-| P6b — All 8 scroll effects | 🔄 in progress (0,1,2 tested) |
+| P6b — All 8 scroll effects | ✅ done (this session) |
+| P6c — 8 px/VBL smooth scroll | ✅ done (this session) |
 | P7 — Effect sequencer | ⬜ pending |
+| P8 — Original scrolltext + music polish | ⬜ pending |

@@ -45,10 +45,93 @@ Per-VBL pipeline in `ScrollerStepVblank` (`src/scroller/engine.s`):
 See `docs/LEARNINGS.md` "Smooth 8 px / VBL scrolling" for the full
 explanation of how this trick works.
 
-**Per-effect palette swap line:** the c2 raster swap line is a runtime
-variable (`raster_swap_c2_addr`) so effects 4 (mirror) and 7 (triangles)
-can relocate it to align with their content boundaries. See
-`SetPalettePointers` in `src/hbl.s`.
+**Per-effect palette swap lines:** the c1 and c2 raster swap addresses are
+runtime variables (`raster_swap_c1_addr`, `raster_swap_c2_addr`) so each
+effect can relocate them to align with its content boundaries. The c3
+swap stays fixed at line 159 (the bottom-row boundary, used by every
+multi-row effect identically). See `SetPalettePointers` in `src/hbl.s`
+for the per-effect overrides.
+
+---
+
+## Tuning palette swap lines per effect
+
+Each multi-row effect splits the visible scroll area into bands that get
+different font palettes (`font_palette_c1`, `c2`, `c3`). The palette
+boundary is a horizontal line — the **swap line** — at which the
+Timer-B handler rewrites colours 1..15 of the Shifter palette. Because
+the swap fires at the END of a scanline, **a swap on raster line N
+takes effect from scanline N+1 onwards.** So pick the swap line as
+`(target Y) − 1` where `target Y` is the first scanline you want in the
+new palette.
+
+### How the swap is dispatched
+
+`TimerBHandler` (`src/hbl.s`) compares `raster_ptr` against three
+addresses each HBL:
+
+```asm
+cmpa.l   raster_swap_c1_addr, a0   ; runtime-configurable (BSS)
+beq.s    .swap_c1
+cmpa.l   raster_swap_c2_addr, a0   ; runtime-configurable (BSS)
+beq.s    .swap_c2
+cmpa.l   #RASTER_SWAP_C3, a0       ; compile-time constant (line 159)
+beq.s    .swap_c3
+```
+
+The c1 and c2 addresses are **per-effect**: `SetPalettePointers` writes
+their value at scroller init time based on the effect type. The c3 swap
+is shared by all effects.
+
+### Defining a new swap line
+
+Constants live in `src/hbl.s`:
+
+```asm
+RASTER_SWAP_C1_DEFAULT  equ raster_table+77*2       ; c1 from Y=78  (default)
+RASTER_SWAP_C1_TYPE7    equ raster_table+73*2       ; c1 from Y=74  (triangle 1 effect)
+RASTER_SWAP_C2_DEFAULT  equ raster_table+118*2      ; c2 from Y=119 (multi-row default)
+RASTER_SWAP_C2_TYPE4    equ raster_table+131*2      ; c2 from Y=132 (mirror line for type 4)
+RASTER_SWAP_C2_TYPE7    equ raster_table+121*2      ; c2 from Y=122 (between triangles for type 7)
+RASTER_SWAP_C3          equ raster_table+159*2      ; c3 from Y=160 (bottom row, fixed)
+```
+
+The pattern: `RASTER_SWAP_C{1,2}_<EFFECT> equ raster_table + <line> * 2`,
+where `<line>` is the scanline number of the swap (zero-based). The `*2`
+is because each `raster_table` entry is a word (2 bytes).
+
+### Selecting the swap line for a new effect
+
+In `SetPalettePointers`, add a case for your effect:
+
+```asm
+.my_new_effect:
+    lea     font_palette_c2, a0
+    move.l  a0, font_pal_ptr2
+    lea     font_palette_c3, a0
+    move.l  a0, font_pal_ptr3
+    move.l  #RASTER_SWAP_C1_MYEFFECT, raster_swap_c1_addr   ; if c1 needs to move
+    move.l  #RASTER_SWAP_C2_MYEFFECT, raster_swap_c2_addr   ; if c2 needs to move
+    rts
+```
+
+If your effect only needs one swap moved, omit the other line — the
+defaults are pre-loaded at the top of `SetPalettePointers`. If the
+effect is single-row (everything in c1), use `.single_row` instead and
+skip the swap overrides.
+
+### Rules of thumb
+
+1. **Keep c1 ≥ line ~70** to stay below the logo region.
+2. **Keep c3 ≤ line ~195** to stay above the screen bottom (line 199
+   exists but the gradient table padding makes it risky).
+3. **`c1 < c2 < c3`** — they must fire in order across the frame.
+4. The scroll buffer's content above the c1 swap shows in the LOGO
+   palette (since c1 hasn't fired yet). Don't put scroll content there
+   unless you really mean it.
+5. If you move a swap line, double-check whether each effect's plot
+   routine still has its content fully inside the intended band — see
+   the geometry notes in each effect's section.
 
 ---
 
@@ -343,32 +426,94 @@ triangle apexes); c1 / c3 swaps stay at the default lines 77 / 159.
 
 | Knob                  | Where                                       | Current value | What it does                                      |
 | --------------------- | ------------------------------------------- | ------------- | ------------------------------------------------- |
-| Triangle 1 apex Y     | `src/scroller/engine.s` `TYPE7_TRI_APEX_Y`  | 79            | source line 0 Y at strips 9-10 (= apex)           |
-| Triangle 2 bottom Y   | `src/scroller/engine.s` `TYPE7_TRI2_BOT_Y`  | 151           | source line 0 Y in dest at apex (= dest bottom)   |
+| Triangle 1 apex Y     | `src/scroller/engine.s` `TYPE7_TRI_APEX_Y`  | 79            | source line 0 Y at strips 9-10 (= apex of /\\)    |
+| Triangle 2 bottom Y   | `src/scroller/engine.s` `TYPE7_TRI2_BOT_Y`  | 151           | source line 0 Y in dest at apex (= bottom of \\/) |
 | Bottom row Y          | `src/scroller/engine.s` `TYPE7_BOT_ROW_Y`   | `SCROLL_Y_3` (160) | static row position                          |
-| Trajectory depth LUT  | `src/scroller/engine.s` `type7_depth_lut`   | 9..0..0..9    | per-strip Y delta from apex                       |
-| Triangle 1 → c2 swap  | `src/hbl.s` `RASTER_SWAP_C2_TYPE7`          | line 117      | moves c2 swap so triangle 2 starts in c2          |
+| Trajectory depth LUT  | `src/scroller/engine.s` `type7_depth_lut`   | 13 → 0 → 13   | per-strip Y delta from apex (one entry per strip) |
+| C2 palette swap line  | `src/hbl.s` `RASTER_SWAP_C2_TYPE7`          | line 117      | scanline at which palette flips c1 → c2           |
 
-To **change the trajectory steepness**, edit `type7_depth_lut`. Default
-shape is `9, 8, …, 1, 0, 0, 1, …, 8, 9` (max depth 9 at edges, slope 1
-line/strip). Halve all values for half-slope (max depth ~4).
+### Tuning the triangles
 
-To **adjust the gap between triangle 1 and triangle 2**, change
-`TYPE7_TRI2_BOT_Y` and the matching `RASTER_SWAP_C2_TYPE7` line in lockstep
-(swap line ≈ triangle 2 apex top Y − 1).
+The triangle trajectory is fully described by **`type7_depth_lut`** — a
+20-entry symmetric word table giving the Y offset (from apex) at each
+strip. Both triangles read the same LUT: triangle 1 *adds* depth (legs
+slope down at edges), triangle 2 *subtracts* depth (legs slope up at
+edges).
+
+Current values:
+```asm
+type7_depth_lut:
+    dc.w 13, 12, 10, 9, 7, 6, 4, 3, 1, 0
+    dc.w  0,  1,  3, 4, 6, 7, 9, 10, 12, 13
+```
+Slope ≈ 1.44 lines/strip (= 13 / 9). At strip 0 / 19, triangle 1 lands at
+`TYPE7_TRI_APEX_Y + 13 = 92`; at strips 9 / 10, at the apex Y=79.
+
+**To make the triangles steeper or flatter:** rewrite the LUT with a new
+edge maximum. Keep it symmetric: `LUT[s] == LUT[19-s]`. Some recipes:
+
+* Slope = 1 (gentlest, peak/trough less pronounced):
+  ```
+  9, 8, 7, 6, 5, 4, 3, 2, 1, 0,  0, 1, 2, 3, 4, 5, 6, 7, 8, 9
+  ```
+* Slope ≈ 1.5:
+  ```
+  14, 12, 11, 9, 8, 6, 5, 3, 2, 0,  0, 2, 3, 5, 6, 8, 9, 11, 12, 14
+  ```
+* Slope = 2 (steeper, sharper peak):
+  ```
+  18, 16, 14, 12, 10, 8, 6, 4, 2, 0,  0, 2, 4, 6, 8, 10, 12, 14, 16, 18
+  ```
+
+**To move the apex** (top of /\\ on the screen): change
+`TYPE7_TRI_APEX_Y`. To keep triangle 1 from ducking under the line-77
+palette swap, keep `TYPE7_TRI_APEX_Y >= 78`.
+
+**To change the gap between the two triangle apexes** (where the letter
+tips meet at the centre): change `TYPE7_TRI2_BOT_Y` (= triangle 2's apex
+Y, the dest position of source line 0). The visible top of triangle 2 at
+the apex is at `TYPE7_TRI2_BOT_Y − 33`; the gap from triangle 1's bottom
+at the apex (`TYPE7_TRI_APEX_Y + 33`) is therefore
+`TYPE7_TRI2_BOT_Y − TYPE7_TRI_APEX_Y − 66`. Current gap: `151 − 79 − 66 = 6`.
+
+**Important:** when you change `TYPE7_TRI2_BOT_Y`, also update
+`RASTER_SWAP_C2_TYPE7` in `src/hbl.s` so the palette swap line still falls
+between the two triangles at the apex. Rule of thumb:
+`RASTER_SWAP_C2_TYPE7 = raster_table + (TYPE7_TRI2_BOT_Y − 33 − 1) × 2`.
+
+**To move the bottom row** (e.g. away from triangle 2's lowest extent):
+change `TYPE7_BOT_ROW_Y`. The c3 palette swap is fixed at line 159 — keep
+the bottom row at Y ≥ 160 to stay in c3.
+
+### Edge overlap (geometric note)
+
+Because each glyph is 34 lines tall and the triangles must touch at the
+centre, the diverging legs at the screen edges *always* overlap by an
+amount proportional to the slope. With the current slope ~1.89, triangle
+1 reaches Y=129 at strip 0 while triangle 2 starts at Y=101 — a 28-line
+overlap. Triangle 2 plots after triangle 1, so the overlap region shows
+triangle 2's upside-down letters.
+
+Trade-offs:
+* **Steeper slope** → more dramatic /\\ shape, more overlap at edges.
+* **Larger apex gap** (`TYPE7_TRI2_BOT_Y` higher) → less overlap, but
+  triangle 2 may push into the bottom row.
+* **Shallower slope** → cleaner separation at edges, less pronounced
+  triangles.
+
+The c2 palette swap is a hard horizontal line, so triangle 2 content
+above the swap line will show in c1 (and triangle 1 content below it in
+c2). For the steepest LUTs you may want to also bump
+`RASTER_SWAP_C2_TYPE7` up to cover the worst-case edge extent of
+triangle 2's top.
 
 ### Routine
 
 `ScrollPlotType7` — clears the scroller region, then for each of 20 strips:
 
 1. Looks up `depth(s)` from `type7_depth_lut`.
-2. Plots triangle 1 at `Y_top = TYPE7_TRI_APEX_Y + depth` (forward render,
+2. Plots triangle 1 at `Y_top = TYPE7_TRI_APEX_Y + depth(s)` (forward render,
    34 lines).
-3. Plots triangle 2 starting at dest `Y_bottom = TYPE7_TRI2_BOT_Y - depth`
+3. Plots triangle 2 starting at dest `Y_bottom = TYPE7_TRI2_BOT_Y − depth(s)`
    and walking *up* (= upside-down letters), 34 lines.
 4. Plots the static bottom row at `TYPE7_BOT_ROW_Y` forward, 34 lines.
-
-Edges geometrically overlap (full-height glyphs + diverging legs touching
-at the centre is a topology problem) — letters at strips 0 / 19 visibly
-cross. Adjust `TYPE7_TRI2_BOT_Y` and the depth LUT amplitude to trade off
-overlap vs centre tip-touch tightness.

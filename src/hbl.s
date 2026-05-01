@@ -83,10 +83,11 @@ ArmTimerBRaster:
 ; ----------------------------------------------------------------------------
 RASTER_SKIP_START       equ     raster_table+107*2      ; scanline 107
 RASTER_SKIP_END         equ     raster_table+112*2      ; scanline 112 (exclusive)
-RASTER_SWAP_C1          equ     raster_table+77*2       ; before row 1 (Y=78)
+RASTER_SWAP_C1_DEFAULT  equ     raster_table+77*2       ; before row 1 (Y=78)
+RASTER_SWAP_C1_TYPE7    equ     raster_table+73*2       ; 4 HBLs earlier for triangle 1 (Y=74)
 RASTER_SWAP_C2_DEFAULT  equ     raster_table+118*2      ; multi-row layout (Y=119)
 RASTER_SWAP_C2_TYPE4    equ     raster_table+131*2      ; mirror line (Y=132)
-RASTER_SWAP_C2_TYPE7    equ     raster_table+117*2      ; between triangle 1 and triangle 2 (Y=118)
+RASTER_SWAP_C2_TYPE7    equ     raster_table+121*2      ; between triangle 1 and triangle 2 (Y=122)
 RASTER_SWAP_C3          equ     raster_table+159*2      ; before row 3 (Y=160)
 
 TimerBHandler:
@@ -94,9 +95,9 @@ TimerBHandler:
                     move.l      raster_ptr, a0
 
                     ; Check for font palette swaps at row boundaries.
-                    ; The c2 swap address is a variable so effect 4 can move
-                    ; the swap from line 118 to line 131 (mirror line).
-                    cmpa.l      #RASTER_SWAP_C1, a0
+                    ; The c1 and c2 swap addresses are variables so each
+                    ; effect can relocate them to align with its content.
+                    cmpa.l      raster_swap_c1_addr, a0
                     beq.s       .swap_c1
                     cmpa.l      raster_swap_c2_addr, a0
                     beq.s       .swap_c2
@@ -160,7 +161,8 @@ SetPalettePointers:
                     lea         font_palette_c1, a0
                     move.l      a0, font_pal_ptr1       ; row 1 always c1
 
-                    ; Default c2 swap fires at line 118 (multi-row layout)
+                    ; Default raster swap addresses (overridden per-effect below)
+                    move.l      #RASTER_SWAP_C1_DEFAULT, raster_swap_c1_addr
                     move.l      #RASTER_SWAP_C2_DEFAULT, raster_swap_c2_addr
 
                     cmp.w       #4, d0
@@ -203,12 +205,15 @@ SetPalettePointers:
 
 .type_7_triangles:
                     ; Triangle 1 = c1, Triangle 2 = c2, Bottom row = c3.
-                    ; C2 swap relocated to line 113 (between the apexes of
+                    ; C1 swap moved 4 lines earlier (line 73, c1 from Y=74)
+                    ; to give triangle 1 a bit of headroom.
+                    ; C2 swap relocated to line 121 (between the apexes of
                     ; the two triangles); C3 swap stays at line 159.
                     lea         font_palette_c2, a0
                     move.l      a0, font_pal_ptr2
                     lea         font_palette_c3, a0
                     move.l      a0, font_pal_ptr3
+                    move.l      #RASTER_SWAP_C1_TYPE7, raster_swap_c1_addr
                     move.l      #RASTER_SWAP_C2_TYPE7, raster_swap_c2_addr
                     rts
 
@@ -225,6 +230,7 @@ raster_ptr:         ds.l        1
 font_pal_ptr1:      ds.l        1               ; palette pointer for row 1
 font_pal_ptr2:      ds.l        1               ; palette pointer for row 2
 font_pal_ptr3:      ds.l        1               ; palette pointer for row 3
+raster_swap_c1_addr: ds.l       1               ; raster_table addr where c1 swap fires
 raster_swap_c2_addr: ds.l       1               ; raster_table addr where c2 swap fires
 
                     section     TEXT
