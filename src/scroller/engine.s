@@ -514,7 +514,6 @@ ScrollPlotType0:
 TYPE1_ROW_Y         equ     100                     ; centered, leaves room for 68-line height
 
 ScrollPlotType1:
-                    ; Clear scroller region to avoid artifacts from sine movement
                     bsr         ClearScrollerRegion
 
                     ; Trajectory sine via LUT, driven by REAL VBL count so the
@@ -1048,21 +1047,36 @@ CLEAR_HEIGHT        equ     CLEAR_END_Y-CLEAR_START_Y   ; 116 lines
 
 ClearScrollerRegion:
                     move.l      back_buffer_ptr, a0
-                    ; Start at line 78
                     adda.l      #CLEAR_START_Y*SCREEN_LINE_BYTES, a0
-                    move.w      #CLEAR_HEIGHT-1, d7
+
+                    ; Pre-zero 13 registers (d0-d6 + a1-a6) for movem-based
+                    ; clearing. movem.l Rlist, (an) costs 8+8n cy — writes 13
+                    ; longs in 112 cy vs 13 individual move.l = 156 cy.
                     moveq       #0, d0
+                    move.l      d0, d1
+                    move.l      d0, d2
+                    move.l      d0, d3
+                    move.l      d0, d4
+                    move.l      d0, d5
+                    move.l      d0, d6
+                    move.l      d0, a1
+                    move.l      d0, a2
+                    move.l      d0, a3
+                    move.l      d0, a4
+                    move.l      d0, a5
+                    move.l      d0, a6
+
+                    move.w      #CLEAR_HEIGHT-1, d7
 .clear_line:
-                    ; Clear 184 bytes = 46 longwords per line
-                    rept        11
-                    move.l      d0, (a0)+
-                    move.l      d0, (a0)+
-                    move.l      d0, (a0)+
-                    move.l      d0, (a0)+
-                    endr
-                    move.l      d0, (a0)+
-                    move.l      d0, (a0)+
-                    ; 11*4 + 2 = 46 longwords = 184 bytes
+                    ; 184 bytes/line = 3×52 (13 longs each) + 28 (7 longs)
+                    movem.l     d0-d6/a1-a6, (a0)
+                    lea         52(a0), a0
+                    movem.l     d0-d6/a1-a6, (a0)
+                    lea         52(a0), a0
+                    movem.l     d0-d6/a1-a6, (a0)
+                    lea         52(a0), a0
+                    movem.l     d0-d6, (a0)
+                    lea         28(a0), a0
                     dbra        d7, .clear_line
                     rts
 
