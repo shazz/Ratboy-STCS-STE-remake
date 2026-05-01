@@ -4,11 +4,41 @@ Session 6 (2026-05-01) — Cycle analysis and optimization roadmap.
 
 ## Current State
 
-**Measured with HRDB:**
+**Measured with HRDB (start of session):**
 - Effect 0 (fastest): 70% @ 2 VBLs, 30% @ 3 VBLs
 - Effects 1-7: 4-6 VBLs each
 
 **Target:** All effects @ 1 VBL (like original CONFO.S from 1988)
+
+## Mid-Session Update (2026-05-01)
+
+After implementing in-screen scroll architecture + Phase 1 polish, HRDB
+showed Effect 0 was now consistently 2 VBLs. **Color-bar profiling** (set
+PROFILE_ENABLED=1, RASTER_ENABLED=0, MUSIC_ENABLED=0) revealed that with
+the gradient OFF, the scroller fits in 1 VBL. So the **Timer-B HBL ISR
+itself** is what pushes us over the boundary.
+
+### The Timer-B Discovery
+
+Reading WRITE_UP.md's analysis of CONFO.S revealed:
+- **Original uses TBDR=3** (fires every 3rd scanline, ~67 fires/frame, NOT
+  200). 3× reduction in ISR count alone.
+- Original handler is ~30 cy common path (vs our ~220 cy) — counter inside
+  the table, immediate-value compares, self-modifying code per-effect.
+- Bulk palette load (movem) at 4 specific scanlines, not per-line.
+
+### Cycle Audit of Our TimerBHandler (before Session-6 opts)
+
+Original common path: 220 cy/fire. With 200 fires/frame:
+```
+200 × 220 cy = 44,000 cy/frame ≈ 86 sl wallclock per VBL of work
+```
+
+This compounds across multi-VBL effects:
+- Effect 0 (2 VBL): ~172 sl HBL cost
+- Effects 1-7 (5 VBL avg): ~430 sl HBL cost — bigger than the entire 313 sl frame
+
+**The HBL is shared overhead — fixing it once helps every effect.**
 
 ## Where the Time Goes (Effect 0)
 
@@ -61,6 +91,17 @@ engine.s:986   mulu.w #SCREEN_LINE_BYTES, d2  ; Type7 inner loop (20× per frame
 |---|-------------|-----------|------------|---------|
 | 6 | Reduce Effect 0 to 2 rows | ~53 sl | Visual change | Effect 0 |
 | 7 | Split work across VBL boundary | ~31 sl | Medium | All |
+
+### TIER 0: SHARED OVERHEAD (Timer-B HBL)
+
+These reduce the per-VBL ISR cost. Saving compounds with VBL count of each effect.
+
+| # | Optimization | Est. Gain | Complexity | Affects |
+|---|-------------|-----------|------------|---------|
+| T1 | Encoded markers in raster_table (sign-bit dispatch) | ~17 sl/VBL | Low | All |
+| T2 | TBDR=2 (halve fire rate, 2-line bands) | ~33 sl/VBL | Medium | All |
+| T3 | TBDR=3 + re-arm (CONFO.S style) | ~45 sl/VBL | High (jitter risk) | All |
+| T4 | Bulk movem palette swap once per frame | ~5-10 sl | Medium | All |
 
 ## LUT Implementation Details
 
@@ -208,11 +249,15 @@ This eliminates the scroll_buffer abstraction but requires careful memory layout
 ## Recommended Attack Order
 
 ### Phase 1: Effect 0 → 1 VBL (THE PRIORITY)
-1. **Reduce Type0 to 2 rows** — THE REAL FIX (~53 sl saved)
-   - Match original CONFO.S architecture
-   - Either drop row 3, or vertically double rows 1-2
-2. Implement glyph LUT (item 3) — low risk, ~1 sl
-3. Re-profile with HRDB — should hit 1 VBL now
+1. **Reduce Type0 to 2 rows** — THE REAL FIX (~53 sl saved) ✅ DONE
+   - Implemented as in-screen scroll-row architecture (CONFO.S type6 trick:
+     row 3 IS the source data at Y=160, only rows 1+2 need copying).
+2. Implement glyph LUT (item 3) — low risk, ~1 sl ✅ DONE
+3. ScrollShiftAndFill polish: movem groups + hoist a5 ✅ DONE (~2 sl)
+4. **Encoded markers in TimerBHandler** ✅ DONE (~17 sl/VBL of work)
+   - sign-bit dispatch for swaps + bit-14 for skip
+5. **TBDR=2 (Timer-B fire rate halved)** ✅ DONE (~33 sl/VBL of work)
+6. Re-profile with HRDB — should hit 1 VBL now
 
 ### Phase 2: Effects 1-7 → 1-2 VBLs
 1. **Blitter for ClearScrollerRegion** — THE BIG WIN (~80 sl!)
@@ -223,6 +268,73 @@ This eliminates the scroll_buffer abstraction but requires careful memory layout
 1. movem.l in ScrollShiftAndFill (~1 sl)
 2. Unroll byte-shift epilogue (~0.5 sl)
 3. Fine-tune any remaining effects
+
+## Timer-B Handler Encoding Scheme (Session 6)
+
+The optimized `TimerBHandler` does NOT use cmpa.l checks for special lines.
+Instead, special actions are **encoded as the top nibble of the raster_table
+word** itself. The hardware ignores the top 4 bits when writing to color 0,
+so we get marker info "for free" alongside the gradient color.
+
+### Encoding
+
+| Top nibble | Action | Bottom 12 bits |
+|------------|--------|----------------|
+| 0 | Normal write | $RGB color |
+| 4 | Skip (no write) | unused |
+| 8 | Swap c1 + write | $RGB color |
+| 9 | Swap c2 + write | $RGB color |
+| A | Swap c3 + write | $RGB color |
+
+### Common Path (no special action)
+
+```asm
+TimerBHandler:
+    move.l  a0, -(sp)              ; 14
+    move.l  d0, -(sp)               ; 14
+    move.l  raster_ptr, a0          ; 16
+    move.w  (a0)+, d0               ; 12 — sets flags from d0
+    bmi.s   .swap                   ; 8 not taken
+    btst    #14, d0                 ; 10
+    bne.s   .skip                   ; 8 not taken
+    move.w  d0, SHIFTER_PALETTE     ; 16
+    addq.l  #RASTER_FIRE_STRIDE-2, a0 ; 8 — finish fire-stride advance
+    move.l  a0, raster_ptr          ; 16
+.exit:
+    bclr.b  #0, MFP_ISRA            ; 18
+    move.l  (sp)+, d0               ; 12
+    move.l  (sp)+, a0               ; 12
+    rte                             ; 20
+; Total: ~184 cy per common-path fire
+```
+
+### Marker Placement
+
+- **Static** (set once in `InstallHBL`): skip range, c3 swap
+- **Dynamic** (set in `SetPalettePointers` per-effect): c1, c2 swap. Old
+  markers cleared via `and.w #$0FFF, (a0)`; new markers OR'd in.
+
+### TBDR=2 + Phase 1
+
+- TBDR=2 → fires every 2nd visible scanline → 100 fires/frame
+- 200 events / 2 = 100, no remainder → phase stable across frames
+- First fire at scanline 1, then 3, 5, ..., 199 (odd lines)
+- raster_ptr advances by RASTER_FIRE_STRIDE (=4) bytes per fire — reads
+  every 2nd entry of the 200-entry gradient table
+- Visual: 2-line gradient bands instead of 1-line. Original CONFO.S used
+  TBDR=3 for 3-line bands.
+
+### Markers must be at fire-aligned byte offsets (multiples of 4)
+
+| Target line | Fire i | Byte offset | Notes |
+|-------------|--------|-------------|-------|
+| 77 (c1)     | 38     | 152         | exact |
+| 73 (c1 t7)  | 36     | 144         | exact |
+| 117 (c2)    | 58     | 232         | was 118 (even, no fire); shift -1 |
+| 131 (c2 t4) | 65     | 260         | exact |
+| 121 (c2 t7) | 60     | 240         | exact |
+| 159 (c3)    | 79     | 316         | exact (preserves color via OR) |
+| 107, 109, 111 (skip) | 53, 54, 55 | 212, 216, 220 | 3 fires in bus-collision range |
 
 ## Reference: 68000 Cycle Counts
 

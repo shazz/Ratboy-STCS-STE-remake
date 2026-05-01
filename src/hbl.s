@@ -18,11 +18,20 @@
 
 TIMER_B_VECTOR      equ     $120
 
-; First Timer B fire per frame = INITIAL_COUNT DE pulses after arm.
-; Timer B in event-count mode counts DE transitions, which only pulse during
-; the 200 visible scanlines. So TBDR=1 → first fire at visible line 0.
-; TBDR=N → first fire at visible line N-1. Tune downward to move gradient up.
-TIMER_B_INITIAL_COUNT equ   1
+; Timer B counts DE pulses (one per visible scanline). TBDR=N → fire every
+; N pulses. With TBDR=2, fires at lines 1, 3, 5, ..., 199 (100/frame, half
+; the rate of TBDR=1). Halves ISR overhead at the cost of 2-line gradient
+; bands instead of 1-line.
+;
+; Phase is stable across frames because 200 (visible lines) / 2 = 100 with no
+; remainder. raster_ptr advances by RASTER_FIRE_STRIDE bytes per fire so the
+; handler reads every 2nd entry of the original 200-entry gradient table.
+TIMER_B_INITIAL_COUNT equ   2
+
+; Bytes raster_ptr advances per fire. With TBDR=2, fires happen every 2nd
+; scanline, so we step by 2 entries × 2 bytes/entry = 4 bytes. Markers must
+; be placed at byte offsets that are multiples of this stride.
+RASTER_FIRE_STRIDE  equ     4
 
 ; ----------------------------------------------------------------------------
 ; InstallHBL — MFP setup; Timer B started in event-count mode and left
@@ -45,6 +54,14 @@ InstallHBL:
 
                     move.b      #TIMER_B_INITIAL_COUNT, MFP_TBDR        ; reload value = 1
                     move.l      #raster_table, raster_ptr
+
+                    ; Encode static markers in raster_table at fire-aligned
+                    ; byte offsets (multiples of RASTER_FIRE_STRIDE).
+                    move.w      #MARK_SKIP, RASTER_SKIP_FIRE1   ; line 107
+                    move.w      #MARK_SKIP, RASTER_SKIP_FIRE2   ; line 109
+                    move.w      #MARK_SKIP, RASTER_SKIP_FIRE3   ; line 111
+                    or.w        #MARK_C3, RASTER_SWAP_C3        ; line 159 swap+color
+
                     move.b      #8, MFP_TBCR                            ; start, event-count mode
                     rts
 
@@ -73,79 +90,109 @@ ArmTimerBRaster:
 ; ----------------------------------------------------------------------------
 ; TimerBHandler — fires on each Shifter DE pulse (every visible scanline).
 ;
-; SESSION 4 FIX (2026-04-29): Skip palette write for scanlines 107-111.
-; The move.w to SHIFTER_PALETTE during those specific scanlines causes a
-; bus collision with Shifter DMA fetch, shifting row 1's last 5 lines by
-; 32 pixels. Skipping the write creates a 5-line "freeze" in the gradient
-; (imperceptible since it's in the red-to-dark transition area).
+; SESSION 6 OPTIMIZATION (2026-05-01): Inline action codes in raster_table
+; values themselves. Top nibble of each word encodes what to do:
+;   $0RGB = normal: write color
+;   $4xxx = skip:   no write (bus-collision range, lines 107..111)
+;   $8RGB = swap c1: write color (top nibble masked by hardware) + load c1
+;   $9RGB = swap c2: write color + load c2
+;   $ARGB = swap c3: write color + load c3
 ;
-; Also handles font palette swaps: c1 at line 77, c2 at line 118, c3 at line 159.
+; Common path (~190 fires/frame) is just: read word, check sign bit + bit 14,
+; write color, advance ptr — ~176 cy vs ~220 cy in the multi-cmpa.l version.
+;
+; Static markers (skip range, c3 swap) are patched into raster_table at
+; InstallHBL time. Dynamic markers (c1, c2) are placed by SetPalettePointers
+; whenever the effect type changes (with old marker auto-cleared by AND).
+;
+; SESSION 4 history: The skip range fix was added because the Shifter DMA
+; fetch collides with palette writes on lines 107..111, shifting row 1's
+; last 5 lines by 32 px. The encoded $4xxx marker preserves that fix.
 ; ----------------------------------------------------------------------------
-RASTER_SKIP_START       equ     raster_table+107*2      ; scanline 107
-RASTER_SKIP_END         equ     raster_table+112*2      ; scanline 112 (exclusive)
-RASTER_SWAP_C1_DEFAULT  equ     raster_table+77*2       ; before row 1 (Y=78)
-RASTER_SWAP_C1_TYPE7    equ     raster_table+73*2       ; 4 HBLs earlier for triangle 1 (Y=74)
-RASTER_SWAP_C2_DEFAULT  equ     raster_table+118*2      ; multi-row layout (Y=119)
-RASTER_SWAP_C2_TYPE4    equ     raster_table+131*2      ; mirror line (Y=132)
-RASTER_SWAP_C2_TYPE7    equ     raster_table+121*2      ; between triangle 1 and triangle 2 (Y=122)
-RASTER_SWAP_C3          equ     raster_table+159*2      ; before row 3 (Y=160)
+; Marker byte offsets in raster_table. Fire i (0..99) reads byte i*4. So markers
+; must go at byte offsets divisible by RASTER_FIRE_STRIDE (=4). Each entry maps
+; to scanline 1+2i (phase 1, fires on odd lines).
+;
+; Target line → fire i → byte offset = i * RASTER_FIRE_STRIDE.
+;   77 → 38 → 152 (c1 default, exact)
+;   73 → 36 → 144 (c1 type7, exact)
+;  118 → 58 → 232 (c2 default, fires at line 117 — 1 line early, all-background)
+;  131 → 65 → 260 (c2 type4, exact)
+;  121 → 60 → 240 (c2 type7, exact)
+;  159 → 79 → 316 (c3, exact)
+RASTER_SWAP_C1_DEFAULT  equ     raster_table+38*RASTER_FIRE_STRIDE   ; line 77
+RASTER_SWAP_C1_TYPE7    equ     raster_table+36*RASTER_FIRE_STRIDE   ; line 73
+RASTER_SWAP_C2_DEFAULT  equ     raster_table+58*RASTER_FIRE_STRIDE   ; line 117 (was 118)
+RASTER_SWAP_C2_TYPE4    equ     raster_table+65*RASTER_FIRE_STRIDE   ; line 131
+RASTER_SWAP_C2_TYPE7    equ     raster_table+60*RASTER_FIRE_STRIDE   ; line 121
+RASTER_SWAP_C3          equ     raster_table+79*RASTER_FIRE_STRIDE   ; line 159
+
+; Skip fires within bus-collision range (lines 107, 109, 111 with phase-1).
+RASTER_SKIP_FIRE1       equ     raster_table+53*RASTER_FIRE_STRIDE   ; line 107
+RASTER_SKIP_FIRE2       equ     raster_table+54*RASTER_FIRE_STRIDE   ; line 109
+RASTER_SKIP_FIRE3       equ     raster_table+55*RASTER_FIRE_STRIDE   ; line 111
+
+; Marker top-nibbles (OR'd into raster_table words):
+MARK_SKIP   equ     $4000
+MARK_C1     equ     $8000
+MARK_C2     equ     $9000
+MARK_C3     equ     $A000
 
 TimerBHandler:
                     move.l      a0, -(sp)
+                    move.l      d0, -(sp)
                     move.l      raster_ptr, a0
+                    move.w      (a0)+, d0               ; +2, sets flags from d0
+                    bmi.s       .swap                   ; bit 15 = swap action
+                    btst        #14, d0
+                    bne.s       .skip                   ; bit 14 = skip (no write)
 
-                    ; Check for font palette swaps at row boundaries.
-                    ; The c1 and c2 swap addresses are variables so each
-                    ; effect can relocate them to align with its content.
-                    cmpa.l      raster_swap_c1_addr, a0
-                    beq.s       .swap_c1
-                    cmpa.l      raster_swap_c2_addr, a0
-                    beq.s       .swap_c2
-                    cmpa.l      #RASTER_SWAP_C3, a0
-                    beq.s       .swap_c3
-                    bra.s       .check_skip
-
-.swap_c1:
-                    movem.l     d0-d7/a1, -(sp)
-                    move.l      font_pal_ptr1, a1
-                    movem.l     2(a1), d0-d6
-                    movem.l     d0-d6, SHIFTER_PALETTE+2
-                    movem.l     (sp)+, d0-d7/a1
-                    bra.s       .check_skip
-
-.swap_c2:
-                    movem.l     d0-d7/a1, -(sp)
-                    move.l      font_pal_ptr2, a1
-                    movem.l     2(a1), d0-d6
-                    movem.l     d0-d6, SHIFTER_PALETTE+2
-                    movem.l     (sp)+, d0-d7/a1
-                    bra.s       .check_skip
-
-.swap_c3:
-                    movem.l     d0-d7/a1, -(sp)
-                    move.l      font_pal_ptr3, a1
-                    movem.l     2(a1), d0-d6
-                    movem.l     d0-d6, SHIFTER_PALETTE+2
-                    movem.l     (sp)+, d0-d7/a1
-
-.check_skip:
-                    ; Skip palette write for scanlines 107-111 to avoid
-                    ; Shifter bus collision that causes row-1 glitch.
-                    cmpa.l      #RASTER_SKIP_START, a0
-                    blo.s       .do_write
-                    cmpa.l      #RASTER_SKIP_END, a0
-                    bhs.s       .do_write
-                    addq.l      #2, a0
-                    bra.s       .done
-
-.do_write:
-                    move.w      (a0)+, SHIFTER_PALETTE
-
-.done:
+                    ; Common path: write color, advance ptr
+                    move.w      d0, SHIFTER_PALETTE
+                    addq.l      #RASTER_FIRE_STRIDE-2, a0  ; +(stride-2) to total stride
                     move.l      a0, raster_ptr
+.exit:
                     bclr.b      #0, MFP_ISRA
+                    move.l      (sp)+, d0
                     move.l      (sp)+, a0
                     rte
+
+.skip:
+                    addq.l      #RASTER_FIRE_STRIDE-2, a0
+                    move.l      a0, raster_ptr
+                    bra.s       .exit
+
+.swap:
+                    addq.l      #RASTER_FIRE_STRIDE-2, a0
+                    move.l      a0, raster_ptr
+                    move.w      d0, SHIFTER_PALETTE     ; write color (top nibble ignored by hw)
+                    cmp.w       #$8FFF, d0
+                    bls.s       .swap_c1                ; $8000..$8FFF
+                    cmp.w       #$9FFF, d0
+                    bls.s       .swap_c2                ; $9000..$9FFF
+                    ; Fall through: $A000..$AFFF = swap c3
+
+.swap_c3:
+                    movem.l     d1-d7/a1, -(sp)
+                    move.l      font_pal_ptr3, a1
+                    movem.l     2(a1), d1-d7
+                    movem.l     d1-d7, SHIFTER_PALETTE+2
+                    movem.l     (sp)+, d1-d7/a1
+                    bra         .exit
+.swap_c2:
+                    movem.l     d1-d7/a1, -(sp)
+                    move.l      font_pal_ptr2, a1
+                    movem.l     2(a1), d1-d7
+                    movem.l     d1-d7, SHIFTER_PALETTE+2
+                    movem.l     (sp)+, d1-d7/a1
+                    bra         .exit
+.swap_c1:
+                    movem.l     d1-d7/a1, -(sp)
+                    move.l      font_pal_ptr1, a1
+                    movem.l     2(a1), d1-d7
+                    movem.l     d1-d7, SHIFTER_PALETTE+2
+                    movem.l     (sp)+, d1-d7/a1
+                    bra         .exit
 
 ; ----------------------------------------------------------------------------
 ; SetPalettePointers — set up palette pointers + c2 swap address based on
@@ -158,6 +205,19 @@ TimerBHandler:
 ;                                     c2 swap relocated to line 131 (mirror)
 ; ----------------------------------------------------------------------------
 SetPalettePointers:
+                    ; Clear OLD c1/c2 markers in raster_table (in case effect
+                    ; changed). Skipped on first call when addrs are still 0.
+                    move.l      raster_swap_c1_addr, a0
+                    cmpa.l      #0, a0
+                    beq.s       .no_old_c1
+                    and.w       #$0FFF, (a0)
+.no_old_c1:
+                    move.l      raster_swap_c2_addr, a0
+                    cmpa.l      #0, a0
+                    beq.s       .no_old_c2
+                    and.w       #$0FFF, (a0)
+.no_old_c2:
+
                     lea         font_palette_c1, a0
                     move.l      a0, font_pal_ptr1       ; row 1 always c1
 
@@ -183,14 +243,14 @@ SetPalettePointers:
                     move.l      a0, font_pal_ptr2
                     lea         font_palette_c3, a0
                     move.l      a0, font_pal_ptr3
-                    rts
+                    bra.s       .apply_markers
 
 .single_row:
                     ; Single-row: all c1
                     lea         font_palette_c1, a0
                     move.l      a0, font_pal_ptr2
                     move.l      a0, font_pal_ptr3
-                    rts
+                    bra.s       .apply_markers
 
 .type_4_mirror:
                     ; Mirror: c1 above the symmetry line, c2 below.
@@ -201,7 +261,7 @@ SetPalettePointers:
                     move.l      a0, font_pal_ptr2
                     move.l      a0, font_pal_ptr3
                     move.l      #RASTER_SWAP_C2_TYPE4, raster_swap_c2_addr
-                    rts
+                    bra.s       .apply_markers
 
 .type_7_triangles:
                     ; Triangle 1 = c1, Triangle 2 = c2, Bottom row = c3.
@@ -215,6 +275,16 @@ SetPalettePointers:
                     move.l      a0, font_pal_ptr3
                     move.l      #RASTER_SWAP_C1_TYPE7, raster_swap_c1_addr
                     move.l      #RASTER_SWAP_C2_TYPE7, raster_swap_c2_addr
+                    ; fall through
+
+.apply_markers:
+                    ; OR the marker top-nibbles into raster_table at the
+                    ; current c1/c2 swap positions. Color (low 12 bits) is
+                    ; preserved; hardware ignores top 4 bits on palette write.
+                    move.l      raster_swap_c1_addr, a0
+                    or.w        #MARK_C1, (a0)
+                    move.l      raster_swap_c2_addr, a0
+                    or.w        #MARK_C2, (a0)
                     rts
 
 ; ----------------------------------------------------------------------------
