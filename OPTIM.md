@@ -249,15 +249,18 @@ This eliminates the scroll_buffer abstraction but requires careful memory layout
 ## Recommended Attack Order
 
 ### Phase 1: Effect 0 → 1 VBL (THE PRIORITY)
-1. **Reduce Type0 to 2 rows** — THE REAL FIX (~53 sl saved) ✅ DONE
-   - Implemented as in-screen scroll-row architecture (CONFO.S type6 trick:
-     row 3 IS the source data at Y=160, only rows 1+2 need copying).
+1. ~~**Reduce Type0 to 2 rows** via in-screen scroll-row architecture~~
+   ❌ REVERTED — broke effects 1-7. The "row 3 IS the source" trick works
+   for effect 0 (which doesn't write to Y=160..193) but `ClearScrollerRegion`
+   in effects 1-7 wipes the source, AND multi-row plots overwrite source
+   for next frame. Architecture restored to BSS scroll_buffer.
 2. Implement glyph LUT (item 3) — low risk, ~1 sl ✅ DONE
 3. ScrollShiftAndFill polish: movem groups + hoist a5 ✅ DONE (~2 sl)
 4. **Encoded markers in TimerBHandler** ✅ DONE (~17 sl/VBL of work)
    - sign-bit dispatch for swaps + bit-14 for skip
 5. **TBDR=2 (Timer-B fire rate halved)** ✅ DONE (~33 sl/VBL of work)
-6. Re-profile with HRDB — should hit 1 VBL now
+6. Re-profile with HRDB — Timer-B savings (~50 sl) more than cover the
+   lost in-screen savings (~22 sl), so Effect 0 should still hit 1 VBL.
 
 ### Phase 2: Effects 1-7 → 1-2 VBLs
 1. **Blitter for ClearScrollerRegion** — THE BIG WIN (~80 sl!)
