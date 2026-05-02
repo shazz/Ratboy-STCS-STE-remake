@@ -94,28 +94,25 @@ ScrollerInit:
 ; Visual: 8 px / VBL smooth scroll, ~40 sl shift work per frame.
 ; ----------------------------------------------------------------------------
 ScrollerStepVblank:
-                    PROFILE_COLOR $00F                  ; Blue = ScrollPlotDispatch
-                    bsr         ScrollPlotDispatch
+                    ; Reordered: render + shift FIRST (during VBI/border, no
+                    ; Shifter contention), THEN plot (during visible, contested).
+                    ; Shift writes to the OTHER scroll buffer (= next frame's
+                    ; active); plot still reads from CURRENT active. Saves
+                    ; ~31 sl wallclock on shift's contended cost.
 
-                    ; Toggle active buffer flag
+                    ; Compute "next active" = OTHER buffer for shift target.
                     move.w      scroll_active_buf, d0
                     eor.w       #1, d0
-                    move.w      d0, scroll_active_buf
-
-                    ; Set scroll_plot_addr to the new active and load addresses
-                    ; into a0 (target = new active) and a1 (source = old active).
                     tst.w       d0
-                    beq.s       .new_a
-                    move.l      #scroll_buffer_b, scroll_plot_addr
-                    lea         scroll_buffer_b, a0
-                    lea         scroll_buffer_a, a1
+                    beq.s       .next_a
+                    lea         scroll_buffer_b, a0     ; target (next active = B)
+                    lea         scroll_buffer_a, a1     ; source (current active = A)
                     bra.s       .render_check
-.new_a:
-                    move.l      #scroll_buffer_a, scroll_plot_addr
-                    lea         scroll_buffer_a, a0
-                    lea         scroll_buffer_b, a1
+.next_a:
+                    lea         scroll_buffer_a, a0     ; target (next active = A)
+                    lea         scroll_buffer_b, a1     ; source (current active = B)
 .render_check:
-                    ; Render new pword into scroll_next_pword every other VBL
+                    ; Render new pword into scroll_next_pword every other VBL.
                     tst.w       scroll_byte_pending
                     bne.s       .no_render
                     PROFILE_COLOR $F00                  ; Red = ScrollRenderNextPword
@@ -123,12 +120,26 @@ ScrollerStepVblank:
                     bsr         ScrollRenderNextPword
                     movem.l     (sp)+, a0/a1
 .no_render:
-                    move.w      scroll_byte_pending, d4 ; 0 or 1 = byte offset
+                    move.w      scroll_byte_pending, d4
 
                     PROFILE_COLOR $0F0                  ; Green = ScrollShiftAndFill
                     bsr         ScrollShiftAndFill
 
-                    ; Toggle byte_pending for next VBL
+                    PROFILE_COLOR $00F                  ; Blue = ScrollPlotDispatch
+                    bsr         ScrollPlotDispatch
+
+                    ; Now commit the toggle: scroll_plot_addr → next active
+                    ; (= the buffer we just shifted), scroll_active_buf flipped.
+                    move.w      scroll_active_buf, d0
+                    eor.w       #1, d0
+                    move.w      d0, scroll_active_buf
+                    tst.w       d0
+                    beq.s       .set_a
+                    move.l      #scroll_buffer_b, scroll_plot_addr
+                    bra.s       .toggle_pending
+.set_a:
+                    move.l      #scroll_buffer_a, scroll_plot_addr
+.toggle_pending:
                     move.w      scroll_byte_pending, d0
                     eor.w       #1, d0
                     move.w      d0, scroll_byte_pending
@@ -282,19 +293,27 @@ ScrollRenderNextPword:
 ; ~146 cy/line vs 322 cy/line for the shift-based version. Saves ~12 sl/call.
 .blend_high_high:
                     lea         scroll_next_pword, a2
-                    move.w      #SCROLL_HEIGHT-1, d7
-.bhh_line:
-                    move.b      (a0), (a2)+             ; plane 0: A high
-                    move.b      (a1), (a2)+             ; plane 0: B high
-                    move.b      2(a0), (a2)+            ; plane 1: A high
-                    move.b      2(a1), (a2)+            ; plane 1: B high
-                    move.b      4(a0), (a2)+            ; plane 2: A high
-                    move.b      4(a1), (a2)+            ; plane 2: B high
-                    move.b      6(a0), (a2)+            ; plane 3: A high
-                    move.b      6(a1), (a2)+            ; plane 3: B high
+                    rept        SCROLL_HEIGHT-1
+                    move.b      (a0), (a2)+
+                    move.b      (a1), (a2)+
+                    move.b      2(a0), (a2)+
+                    move.b      2(a1), (a2)+
+                    move.b      4(a0), (a2)+
+                    move.b      4(a1), (a2)+
+                    move.b      6(a0), (a2)+
+                    move.b      6(a1), (a2)+
                     lea         FONT_GLYPH_LINE_B(a0), a0
                     lea         FONT_GLYPH_LINE_B(a1), a1
-                    dbra        d7, .bhh_line
+                    endr
+                    ; Last (34th) line — drop trailing leas (a0/a1 unused after)
+                    move.b      (a0), (a2)+
+                    move.b      (a1), (a2)+
+                    move.b      2(a0), (a2)+
+                    move.b      2(a1), (a2)+
+                    move.b      4(a0), (a2)+
+                    move.b      4(a1), (a2)+
+                    move.b      6(a0), (a2)+
+                    move.b      6(a1), (a2)+
                     rts
 
 ; --- .blend_low_high: left 8px from a0 low byte, right 8px from a1 high byte ---
@@ -302,19 +321,27 @@ ScrollRenderNextPword:
 ;   A_low byte lives at a0[2n+1], B_high at a1[2n].
 .blend_low_high:
                     lea         scroll_next_pword, a2
-                    move.w      #SCROLL_HEIGHT-1, d7
-.blh_line:
-                    move.b      1(a0), (a2)+            ; plane 0: A low
-                    move.b      (a1), (a2)+             ; plane 0: B high
-                    move.b      3(a0), (a2)+            ; plane 1: A low
-                    move.b      2(a1), (a2)+            ; plane 1: B high
-                    move.b      5(a0), (a2)+            ; plane 2: A low
-                    move.b      4(a1), (a2)+            ; plane 2: B high
-                    move.b      7(a0), (a2)+            ; plane 3: A low
-                    move.b      6(a1), (a2)+            ; plane 3: B high
+                    rept        SCROLL_HEIGHT-1
+                    move.b      1(a0), (a2)+
+                    move.b      (a1), (a2)+
+                    move.b      3(a0), (a2)+
+                    move.b      2(a1), (a2)+
+                    move.b      5(a0), (a2)+
+                    move.b      4(a1), (a2)+
+                    move.b      7(a0), (a2)+
+                    move.b      6(a1), (a2)+
                     lea         FONT_GLYPH_LINE_B(a0), a0
                     lea         FONT_GLYPH_LINE_B(a1), a1
-                    dbra        d7, .blh_line
+                    endr
+                    ; Last (34th) line — drop trailing leas
+                    move.b      1(a0), (a2)+
+                    move.b      (a1), (a2)+
+                    move.b      3(a0), (a2)+
+                    move.b      2(a1), (a2)+
+                    move.b      5(a0), (a2)+
+                    move.b      4(a1), (a2)+
+                    move.b      7(a0), (a2)+
+                    move.b      6(a1), (a2)+
                     rts
 
 ; ----------------------------------------------------------------------------
@@ -442,11 +469,9 @@ ScrollPlotDispatch:
                     beq         ScrollPlotType4         ; type 4 = 4× tall spread
                     cmp.w       #5, d0
                     beq         ScrollPlotType5         ; type 5 = converging diagonal
-                    cmp.w       #6, d0
-                    beq         ScrollPlotType6         ; type 6 = 2 fixed rows
                     cmp.w       #7, d0
                     beq         ScrollPlotType7         ; type 7 = sine wave
-                    bra         ScrollPlotType0         ; fallback
+                    bra         ScrollPlotType0         ; fallback (incl. unused type 6)
 
 ; ----------------------------------------------------------------------------
 ; ScrollPlotType0 — 3-row fixed plot (original behavior)
@@ -901,36 +926,6 @@ ScrollPlotType5:
                     rts
 
 ; ----------------------------------------------------------------------------
-; ScrollPlotType6 — 2 fixed horizontal rows (simplest effect)
-;
-; Just two straight horizontal rows, no wave, no diagonal.
-; Like Type 0 but with 2 rows instead of 3.
-; ----------------------------------------------------------------------------
-TYPE6_ROW1_Y        equ     78                      ; row 1 (from original)
-TYPE6_ROW2_Y        equ     119                     ; row 2 (41 lines below)
-
-ScrollPlotType6:
-                    move.l      scroll_plot_addr, a0
-                    move.l      back_buffer_ptr, a5
-                    lea         (TYPE6_ROW1_Y*SCREEN_LINE_BYTES)(a5), a2
-                    lea         (TYPE6_ROW2_Y*SCREEN_LINE_BYTES)(a5), a3
-
-                    move.w      #SCROLL_HEIGHT-1, d7
-.line:
-                    rept        5
-                    movem.l     (a0)+, d0-d6/a6
-                    movem.l     d0-d6/a6, (a2)
-                    lea         32(a2), a2
-                    movem.l     d0-d6/a6, (a3)
-                    lea         32(a3), a3
-                    endr
-                    addq.l      #8, a0                  ; buffer stride 168, read 160
-                    lea         24(a2), a2              ; screen stride 184, wrote 160
-                    lea         24(a3), a3
-                    dbra        d7, .line
-                    rts
-
-; ----------------------------------------------------------------------------
 ; ScrollPlotType7 — Two triangles + bottom row ("Real Effect 7")
 ;
 ; Three scrollers, same colors as effect 0:
@@ -960,78 +955,96 @@ TYPE7_TRI2_BOT_Y    equ     155                     ; triangle 2 src line 0 Y at
 TYPE7_BOT_ROW_Y     equ     SCROLL_Y_3              ; = 160
 
 ScrollPlotType7:
-                    bsr         ClearScrollerRegion
-                    PROFILE_COLOR $00F                  ; Blue = Plot back from Clear
-
+                    ; No per-frame clear: footprint is static (depth_lut depends
+                    ; on strip index only, no bob). Same trick as Types 2 / 5.
                     move.l      back_buffer_ptr, a5
                     move.l      scroll_plot_addr, a2
+
+                    ; Hoist combined offset LUT (tri1[0..19] then tri2[20..39]).
+                    ; Each entry = (Y * 184 + s * 8). Single word lookup per strip.
+                    lea         type7_offset_lut, a3
+                    moveq       #0, d7
+                    ; Maintain s-derived scalars across strips: d3 = s*8 (X byte
+                    ; offset), d2 = s*2 (LUT word index). Body avoids recomputing
+                    ; (19-d6)*8 etc. (d0/d1 used as inner-loop scratch.)
+                    moveq       #0, d3
+                    moveq       #0, d2
 
                     moveq       #19, d6                 ; strip counter
 
 .strip:
-                    move.w      #19, d0
-                    sub.w       d6, d0
-                    move.w      d0, d3                  ; d3 = strip s
-                    move.w      d0, d2
-                    add.w       d2, d2
-                    lea         type7_depth_lut, a4
-                    move.w      0(a4,d2.w), d5          ; d5 = depth at strip s (0..9)
+                    lea         0(a2,d3.w), a0          ; source = a2 + s*8
 
-                    lsl.w       #3, d0                  ; d0 = strip * 8 (X byte offset)
-                    lea         0(a2,d0.w), a0          ; a0 = source pword
-                    move.l      a0, a6                  ; save source for the 3 plots
-
-                    ; --- Triangle 1 (/\) — forward render ---
-                    move.w      #TYPE7_TRI_APEX_Y, d2
-                    add.w       d5, d2
-                    mulu.w      #SCREEN_LINE_BYTES, d2
+                    ; tri1 dest: a1 = a5 + tri1_offset_lut[s]
+                    move.w      0(a3,d2.w), d7
                     move.l      a5, a1
-                    adda.l      d2, a1
-                    adda.w      d0, a1
+                    adda.l      d7, a1
 
-                    move.w      #SCROLL_HEIGHT-1, d4
-.tri1_line:
-                    move.l      (a0), (a1)
-                    move.l      4(a0), 4(a1)
-                    lea         SCROLL_BUFFER_LINE_BYTES(a0), a0
-                    lea         SCREEN_LINE_BYTES(a1), a1
-                    dbra        d4, .tri1_line
+                    ; tri2 dest: a6 = a5 + tri2_offset_lut[s] (= LUT @ 40+s*2)
+                    move.w      40(a3,d2.w), d7
+                    move.l      a5, a6
+                    adda.l      d7, a6
 
-                    ; --- Triangle 2 (\/) — upside-down render ---
-                    move.l      a6, a0                  ; reset source
-                    move.w      #TYPE7_TRI2_BOT_Y, d2
-                    sub.w       d5, d2
-                    mulu.w      #SCREEN_LINE_BYTES, d2
-                    move.l      a5, a1
-                    adda.l      d2, a1
-                    adda.w      d0, a1
+                    ; bot dest: a4 = a5 + TYPE7_BOT_ROW_Y*184 + s*8
+                    move.l      a5, a4
+                    lea         (TYPE7_BOT_ROW_Y*SCREEN_LINE_BYTES)(a4), a4
+                    adda.w      d3, a4
 
-                    move.w      #SCROLL_HEIGHT-1, d4
-.tri2_line:
-                    move.l      (a0), (a1)
-                    move.l      4(a0), 4(a1)
-                    lea         SCROLL_BUFFER_LINE_BYTES(a0), a0
-                    lea         -SCREEN_LINE_BYTES(a1), a1   ; backward dest
-                    dbra        d4, .tri2_line
+                    ; Merged: read source ONCE per line, write tri1 forward,
+                    ; tri2 backward (upside-down), bot forward. REPT 34 unrolls
+                    ; the inner loop → no per-iter dbra. Last iter skips the
+                    ; line-stride leas since pointers aren't reused this strip.
+                    rept        SCROLL_HEIGHT-1
+                    move.l      (a0)+, d0
+                    move.l      (a0)+, d1
+                    move.l      d0, (a1)+
+                    move.l      d1, (a1)+
+                    move.l      d0, (a6)+
+                    move.l      d1, (a6)+
+                    move.l      d0, (a4)+
+                    move.l      d1, (a4)+
+                    lea         SCROLL_BUFFER_LINE_BYTES-8(a0), a0
+                    lea         SCREEN_LINE_BYTES-8(a1), a1          ; tri1 +1 line
+                    lea         -SCREEN_LINE_BYTES-8(a6), a6         ; tri2 -1 line
+                    lea         SCREEN_LINE_BYTES-8(a4), a4          ; bot +1 line
+                    endr
+                    ; Last (34th) line — drop the trailing leas
+                    move.l      (a0)+, d0
+                    move.l      (a0)+, d1
+                    move.l      d0, (a1)+
+                    move.l      d1, (a1)+
+                    move.l      d0, (a6)+
+                    move.l      d1, (a6)+
+                    move.l      d0, (a4)+
+                    move.l      d1, (a4)+
 
-                    ; --- Bottom row (static) — forward render ---
-                    move.l      a6, a0
-                    move.l      a5, a1
-                    lea         (TYPE7_BOT_ROW_Y*SCREEN_LINE_BYTES)(a1), a1
-                    adda.w      d0, a1
-
-                    move.w      #SCROLL_HEIGHT-1, d4
-.bot_line:
-                    move.l      (a0), (a1)
-                    move.l      4(a0), 4(a1)
-                    lea         SCROLL_BUFFER_LINE_BYTES(a0), a0
-                    lea         SCREEN_LINE_BYTES(a1), a1
-                    dbra        d4, .bot_line
-
+                    addq.w      #8, d3                  ; advance s*8 for next strip
+                    addq.w      #2, d2                  ; advance s*2 for next strip
                     dbra        d6, .strip
                     rts
 
                     even
+; ----------------------------------------------------------------------------
+; type7_offset_lut — combined per-strip dest offsets for Type 7's triangles.
+; First 20 words: tri1 = (TYPE7_TRI_APEX_Y + depth_s) * 184 + s * 8
+; Next 20 words : tri2 = (TYPE7_TRI2_BOT_Y - depth_s) * 184 + s * 8
+; Layout lets one a-reg base + word index serve both via 0(a3,d2.w) and
+; 40(a3,d2.w). depth_s symmetric mirror across strip 9-10.
+; ----------------------------------------------------------------------------
+type7_offset_lut:
+                    ; tri1: (79 + depth_s) * 184 + s * 8
+                    dc.w        92*184+0*8,   91*184+1*8,   89*184+2*8,   88*184+3*8
+                    dc.w        86*184+4*8,   85*184+5*8,   83*184+6*8,   82*184+7*8
+                    dc.w        80*184+8*8,   79*184+9*8,   79*184+10*8,  80*184+11*8
+                    dc.w        82*184+12*8,  83*184+13*8,  85*184+14*8,  86*184+15*8
+                    dc.w        88*184+16*8,  89*184+17*8,  91*184+18*8,  92*184+19*8
+                    ; tri2: (155 - depth_s) * 184 + s * 8
+                    dc.w        142*184+0*8, 143*184+1*8, 145*184+2*8, 146*184+3*8
+                    dc.w        148*184+4*8, 149*184+5*8, 151*184+6*8, 152*184+7*8
+                    dc.w        154*184+8*8, 155*184+9*8, 155*184+10*8, 154*184+11*8
+                    dc.w        152*184+12*8, 151*184+13*8, 149*184+14*8, 148*184+15*8
+                    dc.w        146*184+16*8, 145*184+17*8, 143*184+18*8, 142*184+19*8
+
 ; /\ + \/ trajectory: depth 13 at edges. Triangle 1 at strip 0 lands at
 ; Y=79+13=92 (4 px lower than slope-1, 4 px higher than slope-1.89).
 ; Symmetric, ~13/9 ≈ 1.44 lines per strip.
