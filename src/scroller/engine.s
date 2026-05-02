@@ -94,6 +94,7 @@ ScrollerInit:
 ; Visual: 8 px / VBL smooth scroll, ~40 sl shift work per frame.
 ; ----------------------------------------------------------------------------
 ScrollerStepVblank:
+                    PROFILE_COLOR $00F                  ; Blue = ScrollPlotDispatch
                     bsr         ScrollPlotDispatch
 
                     ; Toggle active buffer flag
@@ -117,18 +118,22 @@ ScrollerStepVblank:
                     ; Render new pword into scroll_next_pword every other VBL
                     tst.w       scroll_byte_pending
                     bne.s       .no_render
+                    PROFILE_COLOR $F00                  ; Red = ScrollRenderNextPword
                     movem.l     a0/a1, -(sp)
                     bsr         ScrollRenderNextPword
                     movem.l     (sp)+, a0/a1
 .no_render:
                     move.w      scroll_byte_pending, d4 ; 0 or 1 = byte offset
 
+                    PROFILE_COLOR $0F0                  ; Green = ScrollShiftAndFill
                     bsr         ScrollShiftAndFill
 
                     ; Toggle byte_pending for next VBL
                     move.w      scroll_byte_pending, d0
                     eor.w       #1, d0
                     move.w      d0, scroll_byte_pending
+
+                    PROFILE_COLOR $000                  ; Black = idle
                     rts
 
 ; ----------------------------------------------------------------------------
@@ -551,6 +556,7 @@ ScrollPlotType1:
                     adda.l      d0, a0
                     move.w      #TYPE1_CLEAR_LINES-1, d7
                     bsr         ClearScrollerRange
+                    PROFILE_COLOR $00F                  ; Blue = Plot back from Clear
 
                     move.l      back_buffer_ptr, a5
                     move.l      scroll_plot_addr, a2
@@ -623,12 +629,30 @@ ScrollPlotType1:
 ; ----------------------------------------------------------------------------
 TYPE2_BASE_Y        equ     78                      ; row 1 Y at right edge (after palette swap)
 TYPE2_REFLECT_GAP   equ     6                       ; gap (lines) between row 1 and reflection
+; row1 top → reflect bottom: 34 (row1 height) + 6 (gap) + 33×2 (interleave) = 106 lines.
+TYPE2_ROW1_TO_REFLECT_BOT equ 106
+
+; Type 2 footprint (fixed across frames — no bob):
+;   Row 1 across strips: Y ∈ [78, 120]
+;   Reflection across strips: Y ∈ [118, 193]
+; Total: Y ∈ [78, 193] = 116 lines vs the conservative 130-line full clear.
+TYPE2_CLEAR_TOP_Y       equ     78
+TYPE2_CLEAR_LINES       equ     116
 
 ScrollPlotType2:
-                    bsr         ClearScrollerRegion
-
+                    ; No per-frame clear: Type 2's footprint is static (per-strip
+                    ; slope depends on s only, not on frame state), so the cells
+                    ; written this frame are the same as last frame. Cells outside
+                    ; the footprint were zeroed at screen init (screen.s) and never
+                    ; get touched. Same trick as CONFO.S `type2`. Saves ~147 sl.
+                    ; (NOTE: when arriving from another effect that wrote outside
+                    ; this footprint, a one-shot clear is needed at transition.)
                     move.l      back_buffer_ptr, a5
                     move.l      scroll_plot_addr, a2
+
+                    ; Hoist y_offset_lut base; dedicate d7 as zero-high holder
+                    lea         y_offset_lut, a3
+                    moveq       #0, d7
 
                     moveq       #19, d6                 ; strip counter
 
@@ -642,47 +666,36 @@ ScrollPlotType2:
                     ; Buffer source
                     lea         0(a2,d3.w), a0
 
-                    ; Row 1 Y = base + d6/2 (left=high Y, right=low Y = down from right to left)
-                    ; Halved slope to fit reflection on screen
-                    move.w      d6, d7
-                    lsr.w       #1, d7                  ; d7 = d6/2 (0..9)
-                    move.w      #TYPE2_BASE_Y, d2
-                    add.w       d7, d2
-                    mulu.w      #SCREEN_LINE_BYTES, d2
+                    ; Row 1 Y = TYPE2_BASE_Y + d6/2 (slope down-left, halved)
+                    move.w      d6, d2
+                    lsr.w       #1, d2                  ; d2 = d6/2 (0..9)
+                    add.w       #TYPE2_BASE_Y, d2       ; d2 = Y value
+                    add.w       d2, d2                  ; word index
+                    move.w      0(a3,d2.w), d7          ; d7 = Y * 184 (high stays 0)
                     move.l      a5, a1
-                    adda.l      d2, a1
+                    adda.l      d7, a1
                     adda.w      d3, a1
 
-                    ; Plot 34 lines for row 1
-                    move.l      a0, a4                  ; save source ptr
+                    ; Merged row1 + reflect: read source ONCE per line, write to both
+                    ; row1 (forward, 1-line stride) and reflection (backward, 2-line
+                    ; stride). Source forward → reflect backward = visual mirror.
+                    ;
+                    ; a4 = reflect-bottom dest = row1_top + 106 lines
+                    ;      (34 row1 + 6 gap + 33×2 reflect interleave = 106)
+                    lea         (TYPE2_ROW1_TO_REFLECT_BOT*SCREEN_LINE_BYTES)(a1), a4
+
                     move.w      #SCROLL_HEIGHT-1, d4
-.row1_line:
-                    move.l      (a0), (a1)
-                    move.l      4(a0), 4(a1)
-                    lea         SCROLL_BUFFER_LINE_BYTES(a0), a0
-                    lea         SCREEN_LINE_BYTES(a1), a1
-                    dbra        d4, .row1_line
-
-                    ; Reflection: start below row 1, read source backward, write doubled
-                    ; a1 is now at row 1 bottom + 1 line, add gap
-                    lea         TYPE2_REFLECT_GAP*SCREEN_LINE_BYTES(a1), a1
-
-                    ; Point source to last line
-                    move.l      a4, a0
-                    adda.l      #(SCROLL_HEIGHT-1)*SCROLL_BUFFER_LINE_BYTES, a0
-
-                    ; Plot reflection: 34 source lines, each single with 1-line gap (interleaved)
-                    move.w      #SCROLL_HEIGHT-1, d4
-.reflect_line:
-                    move.l      (a0), d0
-                    move.l      4(a0), d1
-                    ; Write single line
-                    move.l      d0, (a1)
-                    move.l      d1, 4(a1)
-
-                    lea         -SCROLL_BUFFER_LINE_BYTES(a0), a0    ; backward through source
-                    lea         SCREEN_LINE_BYTES*2(a1), a1          ; 1 written + 1 gap
-                    dbra        d4, .reflect_line
+.merged_line:
+                    move.l      (a0)+, d0               ; read source long 0
+                    move.l      (a0)+, d1               ; read source long 1
+                    move.l      d0, (a1)+               ; row1 long 0
+                    move.l      d1, (a1)+               ; row1 long 1
+                    move.l      d0, (a4)                ; reflect long 0
+                    move.l      d1, 4(a4)               ; reflect long 1
+                    lea         SCROLL_BUFFER_LINE_BYTES-8(a0), a0  ; source +1 line
+                    lea         SCREEN_LINE_BYTES-8(a1), a1          ; row1 +1 line
+                    lea         -SCREEN_LINE_BYTES*2(a4), a4         ; reflect -2 lines
+                    dbra        d4, .merged_line
 
                     dbra        d6, .strip
                     rts
@@ -707,6 +720,7 @@ TYPE3_ROW_Y         equ     100                     ; centered for 68-line inter
 
 ScrollPlotType3:
                     bsr         ClearScrollerRegion
+                    PROFILE_COLOR $00F                  ; Blue = Plot back from Clear
 
                     ; Trajectory sine via LUT, driven by REAL VBL count — same
                     ; mechanism as Type 1: 50 frames per half-cycle = 1 second
@@ -868,6 +882,7 @@ TYPE5_TOP_BASE_Y    equ     TYPE5_TOP_RIGHT_Y-28-66 ; = 82 (src 0 Y at strip 0)
 
 ScrollPlotType5:
                     bsr         ClearScrollerRegion
+                    PROFILE_COLOR $00F                  ; Blue = Plot back from Clear
 
                     move.l      back_buffer_ptr, a5
                     move.l      scroll_plot_addr, a2
@@ -979,6 +994,7 @@ TYPE7_BOT_ROW_Y     equ     SCROLL_Y_3              ; = 160
 
 ScrollPlotType7:
                     bsr         ClearScrollerRegion
+                    PROFILE_COLOR $00F                  ; Blue = Plot back from Clear
 
                     move.l      back_buffer_ptr, a5
                     move.l      scroll_plot_addr, a2
@@ -1078,6 +1094,7 @@ ClearScrollerRegion:
                     ; fall through to ClearScrollerRange
 
 ClearScrollerRange:
+                    PROFILE_COLOR $FF0                  ; Yellow = Clear
                     moveq       #0, d0
                     move.l      d0, d1
                     move.l      d0, d2
