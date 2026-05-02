@@ -69,7 +69,9 @@ VBLHandler:
                     movem.l     top_logo_palette, d0-d7
                     movem.l     d0-d7, SHIFTER_PALETTE
                     ifne        MUSIC_ENABLED
+                    PROFILE_COLOR $F0F                  ; Magenta = MusicSndhPlay
                     jsr         MusicSndhPlay
+                    PROFILE_COLOR $000                  ; Black = idle (back from music)
                     endif
                     ; ArmTimerBRaster: just resets raster_ptr (Timer-B is
                     ; left running by InstallHBL — see hbl.s). Must reset

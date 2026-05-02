@@ -354,21 +354,23 @@ ScrollShiftAndFill:
                     move.l      a0, a2
                     addq.l      #PWORD_BYTES, a2        ; a2 = src (= byte 8)
 
-                    movem.l     (a2)+, d0-d6/a6
-                    movem.l     d0-d6/a6, (a3)
-                    lea         32(a3), a3
-                    movem.l     (a2)+, d0-d6/a6
-                    movem.l     d0-d6/a6, (a3)
-                    lea         32(a3), a3
-                    movem.l     (a2)+, d0-d6/a6
-                    movem.l     d0-d6/a6, (a3)
-                    lea         32(a3), a3
-                    movem.l     (a2)+, d0-d6/a6
-                    movem.l     d0-d6/a6, (a3)
-                    lea         32(a3), a3
-                    rept        6
+                    ; Pword shift: 4× 9-reg movem (36 longs) + 2 trailing.
+                    ; a1 is free inside the loop (only used at setup → a5 hoist),
+                    ; so we can squeeze it into the movem regs for free bandwidth.
+                    movem.l     (a2)+, d0-d6/a1/a6
+                    movem.l     d0-d6/a1/a6, (a3)
+                    lea         36(a3), a3
+                    movem.l     (a2)+, d0-d6/a1/a6
+                    movem.l     d0-d6/a1/a6, (a3)
+                    lea         36(a3), a3
+                    movem.l     (a2)+, d0-d6/a1/a6
+                    movem.l     d0-d6/a1/a6, (a3)
+                    lea         36(a3), a3
+                    movem.l     (a2)+, d0-d6/a1/a6
+                    movem.l     d0-d6/a1/a6, (a3)
+                    lea         36(a3), a3
                     move.l      (a2)+, (a3)+
-                    endr
+                    move.l      (a2)+, (a3)+
                     ; a3 at byte 152 (pword 19 start) — byte-fill target.
 
                     ; Byte-shift fill rightmost pword (pword 19)
@@ -656,11 +658,11 @@ ScrollPlotType2:
                     move.l      (a0)+, d1               ; read source long 1
                     move.l      d0, (a1)+               ; row1 long 0
                     move.l      d1, (a1)+               ; row1 long 1
-                    move.l      d0, (a4)                ; reflect long 0
-                    move.l      d1, 4(a4)               ; reflect long 1
+                    move.l      d0, (a4)+               ; reflect long 0
+                    move.l      d1, (a4)+               ; reflect long 1
                     lea         SCROLL_BUFFER_LINE_BYTES-8(a0), a0  ; source +1 line
                     lea         SCREEN_LINE_BYTES-8(a1), a1          ; row1 +1 line
-                    lea         -SCREEN_LINE_BYTES*2(a4), a4         ; reflect -2 lines
+                    lea         -SCREEN_LINE_BYTES*2-8(a4), a4       ; reflect -2 lines
                     dbra        d4, .merged_line
 
                     dbra        d6, .strip
@@ -847,11 +849,16 @@ TYPE5_TOP_RIGHT_Y   equ     176                     ; bottom of top scroller at 
 TYPE5_TOP_BASE_Y    equ     TYPE5_TOP_RIGHT_Y-28-66 ; = 82 (src 0 Y at strip 0)
 
 ScrollPlotType5:
-                    bsr         ClearScrollerRegion
-                    PROFILE_COLOR $00F                  ; Blue = Plot back from Clear
-
+                    ; No per-frame clear: footprint is static (per-strip slope
+                    ; depends on s only — no bob). Cells outside footprint stay
+                    ; zero from screen init. Same trick as Type 2 / CONFO.S.
                     move.l      back_buffer_ptr, a5
                     move.l      scroll_plot_addr, a2
+
+                    ; Hoist combined top-dest offset LUT (= Y*184 + s*8 per strip).
+                    ; Single word lookup replaces the 1.5·s arithmetic + Y LUT chain.
+                    lea         type5_top_offset_lut, a3
+                    moveq       #0, d7
 
                     moveq       #19, d6                 ; strip counter
 
@@ -862,39 +869,33 @@ ScrollPlotType5:
                     lsl.w       #3, d0                  ; * 8 bytes per pword
                     lea         0(a2,d0.w), a0          ; source
 
-                    ; --- Bottom scroller: Y = TYPE5_BOT_Y, plain ---
+                    ; Bottom dest: a1 = a5 + TYPE5_BOT_Y*184 + s*8
                     move.l      a5, a1
                     lea         (TYPE5_BOT_Y*SCREEN_LINE_BYTES)(a1), a1
                     adda.w      d0, a1
 
-                    move.l      a0, a4                  ; save src for top scroll
-                    move.w      #SCROLL_HEIGHT-1, d4
-.bot_line:
-                    move.l      (a0), (a1)
-                    move.l      4(a0), 4(a1)
-                    lea         SCROLL_BUFFER_LINE_BYTES(a0), a0
-                    lea         SCREEN_LINE_BYTES(a1), a1
-                    dbra        d4, .bot_line
+                    ; Top dest: a4 = a5 + type5_top_offset_lut[s] (precomputed)
+                    move.w      d3, d2
+                    add.w       d2, d2                  ; word index
+                    move.w      0(a3,d2.w), d7          ; combined Y*184 + s*8
+                    move.l      a5, a4
+                    adda.l      d7, a4
 
-                    ; --- Top scroller: 1-line interleave, slope down-right ---
-                    move.w      #TYPE5_TOP_BASE_Y, d2
-                    add.w       d3, d2                  ; Y = base + s
-                    move.w      d3, d5
-                    lsr.w       #1, d5
-                    add.w       d5, d2                  ; Y = base + s + s/2 = base + 1.5·s
-                    mulu.w      #SCREEN_LINE_BYTES, d2
-                    move.l      a5, a3
-                    adda.l      d2, a3
-                    adda.w      d0, a3
-
-                    move.l      a4, a0                  ; reset source
+                    ; Merged inner loop: read source ONCE per line, write to bot
+                    ; (1-line stride) and top (2-line stride interleaved).
+                    ; All three pointers use post-inc → no d16 writes.
                     move.w      #SCROLL_HEIGHT-1, d4
-.top_line:
-                    move.l      (a0), (a3)
-                    move.l      4(a0), 4(a3)
-                    lea         SCROLL_BUFFER_LINE_BYTES(a0), a0
-                    lea         SCREEN_LINE_BYTES*2(a3), a3
-                    dbra        d4, .top_line
+.merged_line:
+                    move.l      (a0)+, d0
+                    move.l      (a0)+, d1
+                    move.l      d0, (a1)+               ; bot long 0
+                    move.l      d1, (a1)+               ; bot long 1
+                    move.l      d0, (a4)+               ; top long 0
+                    move.l      d1, (a4)+               ; top long 1
+                    lea         SCROLL_BUFFER_LINE_BYTES-8(a0), a0
+                    lea         SCREEN_LINE_BYTES-8(a1), a1
+                    lea         SCREEN_LINE_BYTES*2-8(a4), a4
+                    dbra        d4, .merged_line
 
                     dbra        d6, .strip
                     rts
@@ -1108,6 +1109,19 @@ type1_traj_lut:
                     dc.w        19, 19, 20, 20, 20, 20, 20, 20, 20, 19
                     dc.w        19, 19, 18, 18, 17, 16, 15, 15, 14, 13
                     dc.w        12, 11, 10, 9, 7, 6, 5, 4, 3, 1
+
+; ----------------------------------------------------------------------------
+; type5_top_offset_lut — precomputed top-row dest offset per strip for Type 5.
+; Each entry = (TYPE5_TOP_BASE_Y + s + s/2) * 184 + s * 8 (combines Y math
+; and X-byte offset into one word lookup). Strip index s = 0..19.
+; ----------------------------------------------------------------------------
+                    even
+type5_top_offset_lut:
+                    dc.w        82*184+0*8,   83*184+1*8,   85*184+2*8,   86*184+3*8
+                    dc.w        88*184+4*8,   89*184+5*8,   91*184+6*8,   92*184+7*8
+                    dc.w        94*184+8*8,   95*184+9*8,   97*184+10*8,  98*184+11*8
+                    dc.w       100*184+12*8, 101*184+13*8, 103*184+14*8, 104*184+15*8
+                    dc.w       106*184+16*8, 107*184+17*8, 109*184+18*8, 110*184+19*8
 
 ; ----------------------------------------------------------------------------
 ; y_offset_lut — replaces mulu.w #SCREEN_LINE_BYTES, dN in per-strip Y math.
