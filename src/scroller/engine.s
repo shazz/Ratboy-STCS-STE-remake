@@ -270,84 +270,50 @@ ScrollRenderNextPword:
                     dbra        d7, .copy_line
                     rts
 
-; --- .blend_high_high: left 8px from a0, right 8px from a1 (both high bytes) ---
-; a0 = source pword A, a1 = source pword B
-; Output: (A & $FF00) | ((B >> 8) & $00FF) for each plane word
+; --- .blend_high_high: left 8px from a0 high byte, right 8px from a1 high byte ---
+; a0 = source pword A, a1 = source pword B; output: (A_high : B_high) per plane.
+;
+; Byte-move version: scroll_next_pword is system RAM and word-aligned, so per
+; plane we just relocate bytes — no shift/mask/or needed.
+;   Plane n word at offset 2n: byte[2n]=A_high, byte[2n+1]=B_high.
+;   A_high lives at a0[2n], B_high at a1[2n].
+;   Output via (a2)+ post-inc lays the 8 bytes of the pword down sequentially.
+;
+; ~146 cy/line vs 322 cy/line for the shift-based version. Saves ~12 sl/call.
 .blend_high_high:
                     lea         scroll_next_pword, a2
                     move.w      #SCROLL_HEIGHT-1, d7
 .bhh_line:
-                    ; Plane 0
-                    move.w      (a0), d0
-                    and.w       #$FF00, d0
-                    move.w      (a1), d1
-                    lsr.w       #8, d1
-                    or.w        d1, d0
-                    move.w      d0, (a2)
-                    ; Plane 1
-                    move.w      2(a0), d0
-                    and.w       #$FF00, d0
-                    move.w      2(a1), d1
-                    lsr.w       #8, d1
-                    or.w        d1, d0
-                    move.w      d0, 2(a2)
-                    ; Plane 2
-                    move.w      4(a0), d0
-                    and.w       #$FF00, d0
-                    move.w      4(a1), d1
-                    lsr.w       #8, d1
-                    or.w        d1, d0
-                    move.w      d0, 4(a2)
-                    ; Plane 3
-                    move.w      6(a0), d0
-                    and.w       #$FF00, d0
-                    move.w      6(a1), d1
-                    lsr.w       #8, d1
-                    or.w        d1, d0
-                    move.w      d0, 6(a2)
+                    move.b      (a0), (a2)+             ; plane 0: A high
+                    move.b      (a1), (a2)+             ; plane 0: B high
+                    move.b      2(a0), (a2)+            ; plane 1: A high
+                    move.b      2(a1), (a2)+            ; plane 1: B high
+                    move.b      4(a0), (a2)+            ; plane 2: A high
+                    move.b      4(a1), (a2)+            ; plane 2: B high
+                    move.b      6(a0), (a2)+            ; plane 3: A high
+                    move.b      6(a1), (a2)+            ; plane 3: B high
                     lea         FONT_GLYPH_LINE_B(a0), a0
                     lea         FONT_GLYPH_LINE_B(a1), a1
-                    lea         8(a2), a2
                     dbra        d7, .bhh_line
                     rts
 
 ; --- .blend_low_high: left 8px from a0 low byte, right 8px from a1 high byte ---
-; Output: ((A << 8) & $FF00) | ((B >> 8) & $00FF) for each plane word
+; a0 = source pword A, a1 = source pword B; output: (A_low : B_high) per plane.
+;   A_low byte lives at a0[2n+1], B_high at a1[2n].
 .blend_low_high:
                     lea         scroll_next_pword, a2
                     move.w      #SCROLL_HEIGHT-1, d7
 .blh_line:
-                    ; Plane 0
-                    move.w      (a0), d0
-                    lsl.w       #8, d0
-                    move.w      (a1), d1
-                    lsr.w       #8, d1
-                    or.w        d1, d0
-                    move.w      d0, (a2)
-                    ; Plane 1
-                    move.w      2(a0), d0
-                    lsl.w       #8, d0
-                    move.w      2(a1), d1
-                    lsr.w       #8, d1
-                    or.w        d1, d0
-                    move.w      d0, 2(a2)
-                    ; Plane 2
-                    move.w      4(a0), d0
-                    lsl.w       #8, d0
-                    move.w      4(a1), d1
-                    lsr.w       #8, d1
-                    or.w        d1, d0
-                    move.w      d0, 4(a2)
-                    ; Plane 3
-                    move.w      6(a0), d0
-                    lsl.w       #8, d0
-                    move.w      6(a1), d1
-                    lsr.w       #8, d1
-                    or.w        d1, d0
-                    move.w      d0, 6(a2)
+                    move.b      1(a0), (a2)+            ; plane 0: A low
+                    move.b      (a1), (a2)+             ; plane 0: B high
+                    move.b      3(a0), (a2)+            ; plane 1: A low
+                    move.b      2(a1), (a2)+            ; plane 1: B high
+                    move.b      5(a0), (a2)+            ; plane 2: A low
+                    move.b      4(a1), (a2)+            ; plane 2: B high
+                    move.b      7(a0), (a2)+            ; plane 3: A low
+                    move.b      6(a1), (a2)+            ; plane 3: B high
                     lea         FONT_GLYPH_LINE_B(a0), a0
                     lea         FONT_GLYPH_LINE_B(a1), a1
-                    lea         8(a2), a2
                     dbra        d7, .blh_line
                     rts
 
