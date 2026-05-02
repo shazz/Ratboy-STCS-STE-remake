@@ -1,0 +1,227 @@
+{
+  "_comment": "MC68000 instruction timing table. Times in cycles. Sourced from docs/68000_execution_cycles.md",
+  "_note": "On ST at 8MHz, round to multiples of 4 (10→12). b/w means .b or .w size, l means .l",
+
+  "move": {
+    "_comment": "MOVE matrix: src → dst timings as [b/w, l]",
+    "dn": {
+      "dn": [4, 4], "an": [4, 4], "(an)": [8, 12], "(an)+": [8, 12], "-(an)": [8, 14],
+      "d(an)": [12, 16], "d(an,ri)": [14, 18], "abs.w": [12, 16], "abs.l": [16, 20]
+    },
+    "an": {
+      "dn": [4, 4], "an": [4, 4], "(an)": [8, 12], "(an)+": [8, 12], "-(an)": [8, 14],
+      "d(an)": [12, 16], "d(an,ri)": [14, 18], "abs.w": [12, 16], "abs.l": [16, 20]
+    },
+    "(an)": {
+      "dn": [8, 12], "an": [8, 12], "(an)": [12, 20], "(an)+": [12, 20], "-(an)": [12, 20],
+      "d(an)": [16, 24], "d(an,ri)": [18, 26], "abs.w": [16, 24], "abs.l": [20, 28]
+    },
+    "(an)+": {
+      "dn": [8, 12], "an": [8, 12], "(an)": [12, 20], "(an)+": [12, 20], "-(an)": [12, 20],
+      "d(an)": [16, 24], "d(an,ri)": [18, 26], "abs.w": [16, 24], "abs.l": [20, 28]
+    },
+    "-(an)": {
+      "dn": [10, 14], "an": [10, 14], "(an)": [14, 22], "(an)+": [14, 22], "-(an)": [14, 22],
+      "d(an)": [18, 26], "d(an,ri)": [20, 28], "abs.w": [18, 26], "abs.l": [22, 30]
+    },
+    "d(an)": {
+      "dn": [12, 16], "an": [12, 16], "(an)": [16, 24], "(an)+": [16, 24], "-(an)": [16, 24],
+      "d(an)": [20, 28], "d(an,ri)": [22, 30], "abs.w": [20, 28], "abs.l": [24, 32]
+    },
+    "d(an,ri)": {
+      "dn": [14, 18], "an": [14, 18], "(an)": [18, 26], "(an)+": [18, 26], "-(an)": [18, 26],
+      "d(an)": [22, 30], "d(an,ri)": [24, 32], "abs.w": [22, 30], "abs.l": [26, 34]
+    },
+    "abs.w": {
+      "dn": [12, 16], "an": [12, 16], "(an)": [16, 24], "(an)+": [16, 24], "-(an)": [16, 24],
+      "d(an)": [20, 28], "d(an,ri)": [22, 30], "abs.w": [20, 28], "abs.l": [24, 32]
+    },
+    "abs.l": {
+      "dn": [16, 20], "an": [16, 20], "(an)": [20, 28], "(an)+": [20, 28], "-(an)": [20, 28],
+      "d(an)": [24, 32], "d(an,ri)": [26, 34], "abs.w": [24, 32], "abs.l": [28, 36]
+    },
+    "d(pc)": {
+      "dn": [12, 16], "an": [12, 16], "(an)": [16, 24], "(an)+": [16, 24], "-(an)": [16, 24],
+      "d(an)": [20, 28], "d(an,ri)": [22, 30], "abs.w": [20, 28], "abs.l": [24, 32]
+    },
+    "d(pc,ri)": {
+      "dn": [14, 18], "an": [14, 18], "(an)": [18, 26], "(an)+": [18, 26], "-(an)": [18, 26],
+      "d(an)": [22, 30], "d(an,ri)": [24, 32], "abs.w": [22, 30], "abs.l": [26, 34]
+    },
+    "imm": {
+      "dn": [8, 12], "an": [8, 12], "(an)": [12, 20], "(an)+": [12, 20], "-(an)": [12, 20],
+      "d(an)": [16, 24], "d(an,ri)": [18, 26], "abs.w": [16, 24], "abs.l": [20, 28]
+    }
+  },
+
+  "ea_calc": {
+    "_comment": "EA calculation time to add for memory operands: [b/w, l]",
+    "(an)": [4, 8],
+    "(an)+": [4, 8],
+    "-(an)": [6, 10],
+    "d(an)": [8, 12],
+    "d(an,ri)": [10, 14],
+    "abs.w": [8, 12],
+    "abs.l": [12, 16],
+    "d(pc)": [8, 12],
+    "d(pc,ri)": [10, 14],
+    "imm": [4, 8]
+  },
+
+  "standard": {
+    "_comment": "Standard ALU ops. Format: {ea_an: [b/w, l], ea_dn: [b/w, l], dn_mem: [b/w, l]}",
+    "add":  {"ea_an": [8, 8], "ea_dn": [4, 8], "dn_mem": [8, 12]},
+    "adda": {"ea_an": [8, 8]},
+    "and":  {"ea_dn": [4, 8], "dn_mem": [8, 12]},
+    "cmp":  {"ea_an": [6, 6], "ea_dn": [4, 6]},
+    "cmpa": {"ea_an": [6, 6]},
+    "eor":  {"ea_dn": [4, 8], "dn_mem": [8, 12]},
+    "or":   {"ea_dn": [4, 8], "dn_mem": [8, 12]},
+    "sub":  {"ea_an": [8, 8], "ea_dn": [4, 8], "dn_mem": [8, 12]},
+    "suba": {"ea_an": [8, 8]},
+    "divs": {"ea_dn": [158, 158]},
+    "divu": {"ea_dn": [140, 140]},
+    "muls": {"ea_dn": [70, 70]},
+    "mulu": {"ea_dn": [70, 70]}
+  },
+
+  "immediate": {
+    "_comment": "Immediate instructions: {dn: [b/w, l], an: [b/w, l], mem: [b/w, l]}",
+    "addi": {"dn": [8, 16], "mem": [12, 20]},
+    "addq": {"dn": [4, 8], "an": [8, 8], "mem": [8, 12]},
+    "andi": {"dn": [8, 16], "mem": [12, 20]},
+    "cmpi": {"dn": [8, 14], "an": [8, 14], "mem": [8, 12]},
+    "eori": {"dn": [8, 16], "mem": [12, 20]},
+    "moveq": {"dn": [4, 4]},
+    "ori":  {"dn": [8, 16], "mem": [12, 20]},
+    "subi": {"dn": [8, 16], "mem": [12, 20]},
+    "subq": {"dn": [4, 8], "an": [8, 8], "mem": [8, 12]},
+    "clr":  {"dn": [4, 6], "an": [4, 6], "mem": [8, 12]},
+    "neg":  {"dn": [4, 6], "an": [4, 6], "mem": [8, 12]},
+    "negx": {"dn": [4, 6], "an": [4, 6], "mem": [8, 12]},
+    "not":  {"dn": [4, 6], "an": [4, 6], "mem": [8, 12]},
+    "nbcd": {"dn": [6, 6], "mem": [8, 8]},
+    "scc":  {"dn": [4, 6], "mem": [8, 8]},
+    "tas":  {"dn": [4, 4], "mem": [10, 10]},
+    "tst":  {"dn": [4, 4], "an": [4, 4], "mem": [4, 4]}
+  },
+
+  "shift": {
+    "_comment": "Shift/rotate: base time + 2 × shift_count for register. [b/w, l] for reg, single for mem",
+    "asl":  {"reg": [6, 8], "mem": 8},
+    "asr":  {"reg": [6, 8], "mem": 8},
+    "lsl":  {"reg": [6, 8], "mem": 8},
+    "lsr":  {"reg": [6, 8], "mem": 8},
+    "rol":  {"reg": [6, 8], "mem": 8},
+    "ror":  {"reg": [6, 8], "mem": 8},
+    "roxl": {"reg": [6, 8], "mem": 8},
+    "roxr": {"reg": [6, 8], "mem": 8}
+  },
+
+  "control": {
+    "_comment": "Control flow by EA mode",
+    "jmp": {
+      "(an)": 8, "d(an)": 10, "d(an,ri)": 14, "abs.w": 10, "abs.l": 12, "d(pc)": 10, "d(pc,ri)": 14
+    },
+    "jsr": {
+      "(an)": 16, "d(an)": 18, "d(an,ri)": 22, "abs.w": 18, "abs.l": 20, "d(pc)": 18, "d(pc,ri)": 22
+    },
+    "lea": {
+      "(an)": 4, "d(an)": 8, "d(an,ri)": 12, "abs.w": 8, "abs.l": 12, "d(pc)": 8, "d(pc,ri)": 12
+    },
+    "pea": {
+      "(an)": 12, "d(an)": 16, "d(an,ri)": 20, "abs.w": 16, "abs.l": 20, "d(pc)": 16, "d(pc,ri)": 20
+    }
+  },
+
+  "movem": {
+    "_comment": "MOVEM base times by EA mode. Add 4×n for .w or 8×n for .l where n=register count",
+    "mem_to_reg": {
+      "(an)": 12, "(an)+": 12, "d(an)": 16, "d(an,ri)": 18, "abs.w": 16, "abs.l": 20, "d(pc)": 16, "d(pc,ri)": 18
+    },
+    "reg_to_mem": {
+      "(an)": 8, "-(an)": 8, "d(an)": 12, "d(an,ri)": 14, "abs.w": 12, "abs.l": 16
+    }
+  },
+
+  "bit": {
+    "_comment": "Bit instructions. reg_l is .l on register, mem_b is .b on memory",
+    "bchg": {"reg": [8, 12], "mem": [8, 12]},
+    "bclr": {"reg": [10, 14], "mem": [8, 12]},
+    "bset": {"reg": [8, 12], "mem": [8, 12]},
+    "btst": {"reg": [6, 10], "mem": [4, 8]}
+  },
+
+  "branch": {
+    "_comment": "Branch timings: [taken, not_taken]",
+    "bcc":  {"taken": 10, "not_taken": 8},
+    "bcs":  {"taken": 10, "not_taken": 8},
+    "beq":  {"taken": 10, "not_taken": 8},
+    "bge":  {"taken": 10, "not_taken": 8},
+    "bgt":  {"taken": 10, "not_taken": 8},
+    "bhi":  {"taken": 10, "not_taken": 8},
+    "ble":  {"taken": 10, "not_taken": 8},
+    "bls":  {"taken": 10, "not_taken": 8},
+    "blt":  {"taken": 10, "not_taken": 8},
+    "bmi":  {"taken": 10, "not_taken": 8},
+    "bne":  {"taken": 10, "not_taken": 8},
+    "bpl":  {"taken": 10, "not_taken": 8},
+    "bvc":  {"taken": 10, "not_taken": 8},
+    "bvs":  {"taken": 10, "not_taken": 8},
+    "bra":  10,
+    "bsr":  18
+  },
+
+  "dbcc": {
+    "_comment": "DBcc: condition true=12, condition false+loop=10, condition false+exit=14",
+    "dbra": {"loop": 10, "exit": 14},
+    "dbf":  {"loop": 10, "exit": 14},
+    "dbt":  {"loop": 12, "exit": 12},
+    "dbcc": {"true": 12, "loop": 10, "exit": 14},
+    "dbcs": {"true": 12, "loop": 10, "exit": 14},
+    "dbeq": {"true": 12, "loop": 10, "exit": 14},
+    "dbge": {"true": 12, "loop": 10, "exit": 14},
+    "dbgt": {"true": 12, "loop": 10, "exit": 14},
+    "dbhi": {"true": 12, "loop": 10, "exit": 14},
+    "dble": {"true": 12, "loop": 10, "exit": 14},
+    "dbls": {"true": 12, "loop": 10, "exit": 14},
+    "dblt": {"true": 12, "loop": 10, "exit": 14},
+    "dbmi": {"true": 12, "loop": 10, "exit": 14},
+    "dbne": {"true": 12, "loop": 10, "exit": 14},
+    "dbpl": {"true": 12, "loop": 10, "exit": 14},
+    "dbvc": {"true": 12, "loop": 10, "exit": 14},
+    "dbvs": {"true": 12, "loop": 10, "exit": 14}
+  },
+
+  "misc": {
+    "exg": 6,
+    "ext": 4,
+    "link": 18,
+    "move_to_ccr": 12,
+    "move_to_sr": 12,
+    "move_from_sr": {"reg": 6, "mem": 8},
+    "move_to_usp": 4,
+    "move_from_usp": 4,
+    "nop": 4,
+    "reset": 132,
+    "rte": 20,
+    "rtr": 20,
+    "rts": 16,
+    "stop": 4,
+    "swap": 4,
+    "trap": 34,
+    "trapv": {"trap": 34, "no_trap": 4},
+    "unlk": 12,
+    "illegal": 34
+  },
+
+  "other": {
+    "addx": {"reg": [4, 8], "mem": [18, 30]},
+    "subx": {"reg": [4, 8], "mem": [18, 30]},
+    "cmpm": {"mem": [12, 20]},
+    "abcd": {"reg": 6, "mem": 18},
+    "sbcd": {"reg": 6, "mem": 18},
+    "chk": 40,
+    "movep": {"w": 16, "l": 24}
+  }
+}
