@@ -513,12 +513,15 @@ ScrollPlotType0:
 ; ----------------------------------------------------------------------------
 TYPE1_ROW_Y         equ     100                     ; centered, leaves room for 68-line height
 
-ScrollPlotType1:
-                    bsr         ClearScrollerRegion
+; Targeted-clear band: per-frame footprint = [base+bob-3, base+bob+70] = 74 lines.
+; Margin ±5 absorbs cross-frame bob delta (max ~5 lines/call when effect runs at
+; 4 VBL and crosses 4 LUT entries). Total cleared per frame: 84 lines vs 130 in
+; the conservative full-region clear.
+TYPE1_CLEAR_TOP_MARGIN  equ     8                       ; 3 (top of footprint) + 5 (jump margin)
+TYPE1_CLEAR_LINES       equ     84
 
-                    ; Trajectory sine via LUT, driven by REAL VBL count so the
-                    ; rate is independent of how many VBLs MainLoop work spans.
-                    ; 50 frames per half-cycle = 1 second top-to-bottom at 50 Hz.
+ScrollPlotType1:
+                    ; --- Trajectory sine first (drives both clear bounds and plot Y) ---
                     move.w      vbl_counter, d0
                     move.w      type1_prev_vbl, d1
                     move.w      d0, type1_prev_vbl
@@ -539,14 +542,30 @@ ScrollPlotType1:
                     muls.w      d1, d0
                     move.w      d0, sine_offset
 
+                    ; --- Targeted clear: 84 lines around the bob footprint ---
+                    move.w      #TYPE1_ROW_Y, d0
+                    add.w       sine_offset, d0
+                    sub.w       #TYPE1_CLEAR_TOP_MARGIN, d0
+                    mulu.w      #SCREEN_LINE_BYTES, d0
+                    move.l      back_buffer_ptr, a0
+                    adda.l      d0, a0
+                    move.w      #TYPE1_CLEAR_LINES-1, d7
+                    bsr         ClearScrollerRange
+
                     move.l      back_buffer_ptr, a5
                     move.l      scroll_plot_addr, a2
 
-                    ; Base Y + bob offset
+                    ; Hoist LUT bases used per strip
+                    lea         y_offset_lut, a4
+                    lea         type1_inside_lut, a3
+
+                    ; Base Y + bob offset (constant for the frame)
                     move.w      #TYPE1_ROW_Y, d3
                     add.w       sine_offset, d3
 
-                    ; Plot 20 strips: per-strip Y offset from LUT (4 sine cycles)
+                    ; d7 = 0; high word stays 0 across strips so move.w to d7 yields a clean long
+                    moveq       #0, d7
+
                     moveq       #19, d6                 ; strip counter
 
 .strip:
@@ -555,13 +574,16 @@ ScrollPlotType1:
                     sub.w       d6, d0                  ; d0 = strip index 0-19
                     move.w      d0, d2
                     add.w       d2, d2                  ; * 2 (word index)
-                    lea         type1_inside_lut, a3
-                    move.w      0(a3,d2.w), d5          ; d5 = absolute Y offset for this strip
+                    move.w      0(a3,d2.w), d5          ; d5 = per-strip Y offset
 
-                    ; Calculate Y = base + per-strip offset
+                    ; Y = base + bob + per-strip
                     move.w      d3, d2
                     add.w       d5, d2
-                    mulu.w      #SCREEN_LINE_BYTES, d2
+
+                    ; y_offset_lut lookup (replaces mulu.w #SCREEN_LINE_BYTES, d2):
+                    ; d7 high stays 0, so move.w produces a positive long offset.
+                    add.w       d2, d2                  ; Y * 2 = word index
+                    move.w      0(a4,d2.w), d7          ; d7 = Y * 184
 
                     ; Buffer source for this strip
                     lsl.w       #3, d0                  ; * 8 bytes per pword
@@ -569,7 +591,7 @@ ScrollPlotType1:
 
                     ; Screen dest
                     move.l      a5, a1
-                    adda.l      d2, a1
+                    adda.l      d7, a1
                     adda.w      d0, a1
 
                     ; Copy 34 source lines → 68 dest lines (2× vertical)
@@ -1036,22 +1058,26 @@ type7_depth_lut:
 
 
 ; ----------------------------------------------------------------------------
-; ClearScrollerRegion — Clear screen area used by sine effects (lines 78-193)
+; ClearScrollerRegion / ClearScrollerRange — clear scroll-area lines.
 ;
-; For moving effects (Type 1, 4, 7), previous frame's pixels must be erased
-; to avoid artifacts. Clears 116 lines × 184 bytes ≈ 21KB.
+; ClearScrollerRegion: clears the full conservative range Y=70..199 (130 lines).
+; ClearScrollerRange (a0=top byte, d7=lines-1): clears N lines from a0; lets
+; effects target only the footprint they actually touch.
+;
+; Both use movem.l with 13 pre-zeroed regs: 184 bytes/line = 3×52 (13 longs) +
+; 28 (7 longs) per scanline → 432 cy/line vs 552 cy for individual move.l.
 ; ----------------------------------------------------------------------------
 CLEAR_START_Y       equ     70
 CLEAR_END_Y         equ     199                     ; extended to cover full reflection
-CLEAR_HEIGHT        equ     CLEAR_END_Y-CLEAR_START_Y   ; 116 lines
+CLEAR_HEIGHT        equ     CLEAR_END_Y-CLEAR_START_Y   ; 130 lines
 
 ClearScrollerRegion:
                     move.l      back_buffer_ptr, a0
                     adda.l      #CLEAR_START_Y*SCREEN_LINE_BYTES, a0
+                    move.w      #CLEAR_HEIGHT-1, d7
+                    ; fall through to ClearScrollerRange
 
-                    ; Pre-zero 13 registers (d0-d6 + a1-a6) for movem-based
-                    ; clearing. movem.l Rlist, (an) costs 8+8n cy — writes 13
-                    ; longs in 112 cy vs 13 individual move.l = 156 cy.
+ClearScrollerRange:
                     moveq       #0, d0
                     move.l      d0, d1
                     move.l      d0, d2
@@ -1065,10 +1091,7 @@ ClearScrollerRegion:
                     move.l      d0, a4
                     move.l      d0, a5
                     move.l      d0, a6
-
-                    move.w      #CLEAR_HEIGHT-1, d7
 .clear_line:
-                    ; 184 bytes/line = 3×52 (13 longs each) + 28 (7 longs)
                     movem.l     d0-d6/a1-a6, (a0)
                     lea         52(a0), a0
                     movem.l     d0-d6/a1-a6, (a0)
@@ -1102,6 +1125,40 @@ type1_traj_lut:
                     dc.w        19, 19, 20, 20, 20, 20, 20, 20, 20, 19
                     dc.w        19, 19, 18, 18, 17, 16, 15, 15, 14, 13
                     dc.w        12, 11, 10, 9, 7, 6, 5, 4, 3, 1
+
+; ----------------------------------------------------------------------------
+; y_offset_lut — replaces mulu.w #SCREEN_LINE_BYTES, dN in per-strip Y math.
+; 200 entries × 2 bytes = 400 bytes. Entry Y = Y * SCREEN_LINE_BYTES (= 184).
+; Word entries; consume with move.w into a register whose high word is 0
+; (dedicate a Dn via moveq #0, dN once outside the loop).
+; ----------------------------------------------------------------------------
+                    even
+y_offset_lut:
+                    dc.w           0,   184,   368,   552,   736,   920,  1104,  1288
+                    dc.w        1472,  1656,  1840,  2024,  2208,  2392,  2576,  2760
+                    dc.w        2944,  3128,  3312,  3496,  3680,  3864,  4048,  4232
+                    dc.w        4416,  4600,  4784,  4968,  5152,  5336,  5520,  5704
+                    dc.w        5888,  6072,  6256,  6440,  6624,  6808,  6992,  7176
+                    dc.w        7360,  7544,  7728,  7912,  8096,  8280,  8464,  8648
+                    dc.w        8832,  9016,  9200,  9384,  9568,  9752,  9936, 10120
+                    dc.w       10304, 10488, 10672, 10856, 11040, 11224, 11408, 11592
+                    dc.w       11776, 11960, 12144, 12328, 12512, 12696, 12880, 13064
+                    dc.w       13248, 13432, 13616, 13800, 13984, 14168, 14352, 14536
+                    dc.w       14720, 14904, 15088, 15272, 15456, 15640, 15824, 16008
+                    dc.w       16192, 16376, 16560, 16744, 16928, 17112, 17296, 17480
+                    dc.w       17664, 17848, 18032, 18216, 18400, 18584, 18768, 18952
+                    dc.w       19136, 19320, 19504, 19688, 19872, 20056, 20240, 20424
+                    dc.w       20608, 20792, 20976, 21160, 21344, 21528, 21712, 21896
+                    dc.w       22080, 22264, 22448, 22632, 22816, 23000, 23184, 23368
+                    dc.w       23552, 23736, 23920, 24104, 24288, 24472, 24656, 24840
+                    dc.w       25024, 25208, 25392, 25576, 25760, 25944, 26128, 26312
+                    dc.w       26496, 26680, 26864, 27048, 27232, 27416, 27600, 27784
+                    dc.w       27968, 28152, 28336, 28520, 28704, 28888, 29072, 29256
+                    dc.w       29440, 29624, 29808, 29992, 30176, 30360, 30544, 30728
+                    dc.w       30912, 31096, 31280, 31464, 31648, 31832, 32016, 32200
+                    dc.w       32384, 32568, 32752, 32936, 33120, 33304, 33488, 33672
+                    dc.w       33856, 34040, 34224, 34408, 34592, 34776, 34960, 35144
+                    dc.w       35328, 35512, 35696, 35880, 36064, 36248, 36432, 36616
 
 ; ----------------------------------------------------------------------------
 ; glyph_offset_lut — replaces mulu.w #FONT_GLYPH_BYTES, d1 in fetch_next_char.
