@@ -20,6 +20,21 @@
 ; ----------------------------------------------------------------------------
 
                     even
+; -----------------------------------------------------------------------------
+; PERF-TEST scrolltext: no effect-change markers → effect stays locked to
+; SCROLL_EFFECT_DEFAULT for the full session. Simple repeating alphabet
+; lets us read VBL counts cleanly. Restore the production scrolltext below
+; before shipping.
+; -----------------------------------------------------------------------------
+scrolltext_S1_test:
+                    dc.b    "ABCDEFGHIJKLMNOPQRSTUVWXYZ 0123456789 ABCDEFGHIJKLMNOPQRSTUVWXYZ 0123456789       "
+                    dc.b    0                       ; wrap → back to scrolltext_S1
+                    even
+
+; -----------------------------------------------------------------------------
+; PRODUCTION scrolltext (commented out for perf-testing).
+; -----------------------------------------------------------------------------
+                    ifne    1
 scrolltext_S1:
                     ; --- effect 0 — three fixed rows ---
                     dc.b    1
@@ -74,3 +89,4 @@ scrolltext_S1:
 
                     dc.b    0                       ; wrap → back to scrolltext_S1
                     even
+                    endc

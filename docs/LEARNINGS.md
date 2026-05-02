@@ -494,3 +494,130 @@ The plot routines need one tiny change: `lea scroll_buffer, a2` becomes
 
 **Result:** smooth 8-px/VBL scrolling matching the 1988 original, at ~50 sl
 of shift work per frame instead of ~190.
+
+
+---
+
+## Session 6 — Performance optimizations (2026-05-01)
+
+### 2026-05-01 — Color-bar profiling: write color 0 at section boundaries
+
+**Setup:** `PROFILE_ENABLED=1` in constants.s + `RASTER_ENABLED=0` (Timer-B
+overrides color 0 every line otherwise) + recommended `MUSIC_ENABLED=0`
+(less ISR jitter). The `PROFILE_COLOR` macro in `macros.s` writes color 0
+when the toggle is on, expands to nothing when off.
+
+`ScrollerStepVblank` writes RED/GREEN/BLUE/BLACK at boundaries between
+ScrollRenderNextPword / ScrollShiftAndFill / ScrollPlotDispatch / done.
+Each band on screen = scanlines that section took. **A blue band at the
+TOP of a frame = last frame's plot work overflowed VBL boundary.**
+
+This identified the Timer-B HBL ISR as the hidden bottleneck — with
+gradient OFF, scroller fits in 1 VBL; with gradient ON, it spills.
+
+### 2026-05-01 — Encoded action markers in raster_table values
+
+The TimerBHandler used to do 3 cmpa.l swap-address checks + a skip-range
+check on every fire (~220 cy common path). With 200 fires/frame this
+costs ~85 sl wallclock per VBL of work — and compounds across multi-VBL
+effects (effects 1-7 at 5 VBL = ~425 sl HBL cost).
+
+**Trick: encode the action as the top nibble of each raster_table word**:
+
+| Top nibble | Action | Bottom 12 bits |
+|---|---|---|
+| 0 | normal write | $RGB color |
+| 4 | skip (no write) | unused |
+| 8 | swap c1 + write | $RGB |
+| 9 | swap c2 + write | $RGB |
+| A | swap c3 + write | $RGB |
+
+Hardware ignores the top 4 bits when writing to the palette register,
+so we get the marker info "for free" alongside the color. Common path
+becomes: `bmi.s .swap` (sign bit for swap) + `btst #14, d0` (skip).
+Drops common path from ~220 cy → ~184 cy. Saves ~17 sl per VBL of work.
+
+Static markers (skip range Y=107..111, c3 swap line 159) are patched
+into raster_table once in InstallHBL. Dynamic markers (c1, c2 — vary
+per-effect type) are managed by SetPalettePointers with a paired AND
+$0FFF (clear old marker) / OR $X000 (set new marker).
+
+### 2026-05-01 — TBDR=2 (or higher) for Timer-B fire-rate reduction
+
+The MFP Timer-B in event-count mode counts DE pulses (1 per visible
+scanline). TBDR=N → fires every N pulses. **Halve the rate, halve the
+ISR overhead** — at the cost of N-line gradient bands instead of 1-line.
+
+Phase stability requirement: **200 (visible lines) must be divisible by
+N**, otherwise the phase drifts each frame (CONFO.S re-arms Timer-B in
+the VBL handler to fix this; we avoid re-arming because of the documented
+1-scanline jitter problem). TBDR ∈ {2, 4, 5, 8, 10, 20, ...} all work.
+
+We picked TBDR=2 (100 fires/frame, 2-line gradient bands, ~36 sl ISR
+cost per VBL of work).
+
+**Marker placement constraint:** raster_table markers must be at
+fire-aligned byte offsets (multiples of `RASTER_FIRE_STRIDE` =
+`N × 2 bytes/entry`). Swap targets (c1 line 77, c2 line 118, c3 line
+159) get rounded to nearest fire — typically 0-1 line drift, invisible
+on the smooth gradient.
+
+### 2026-05-01 — In-screen scroll-row architecture is incompatible with multi-row effects
+
+Tried the CONFO.S `type6` trick: scroll source row at Y=160 visible,
+shifted in place, plot only writes Y=78 + Y=119 (not Y=160). Saved ~22 sl.
+
+**Why reverted:** effects 1, 2, 3, 5, 7 call `ClearScrollerRegion` which
+clears Y=70..198 — wipes the source row before plot reads it → no scroll
+text rendered. AND multi-row effects (Type 1 bob extends to Y=167; Type 4
+mirror writes Y=80..193) overwrite Y=160..193 area. After SwapBuffers the
+"source" buffer becomes front, and next frame's ScrollShiftAndFill
+byte-fills from corrupted plot data → cascading source corruption.
+
+The trick is elegant for Type 0 in isolation but fundamentally breaks
+when other effects write to the source area. Reverted to BSS scroll_buffer.
+
+**Lesson:** in-screen architecture works for **fixed** plot geometry
+(write to a known Y range that excludes the source). When plot Y varies
+(sine bob) or plot range overlaps source (mirrors), the plot corrupts
+the source for next frame's shift.
+
+### 2026-05-01 — ClearScrollerRegion: 13-register movem.l beats per-long writes
+
+Original CPU clear: per-line `rept 46 / move.l d0, (a0)+`. 552 cy/line.
+
+Faster: pre-zero 13 registers (d0-d6 + a1-a6), write via movem groups.
+Per-line: 3 × `movem.l d0-d6/a1-a6, (a0)` (52 bytes each, 112 cy + lea 8)
++ 1 × `movem.l d0-d6, (a0)` (28 bytes, 64 cy + lea 8) = 432 cy.
+
+Saves 120 cy/line × 116 lines = ~14K cy ≈ ~27 sl wallclock without
+contention; ~40-50 sl with Shifter contention factor. Per Clear call.
+
+For multi-VBL effects this compounds — exactly the change that dropped
+effects 1-7 from 4-6 VBL down to 2 VBL.
+
+**Pattern:** for memory-fill loops, movem with N pre-set zero regs costs
+8+8N cy for N longs vs N×12 cy individual moves. movem wins at N≥3, with
+diminishing-returns sweet spot around N=12-13 (limited by register count
+minus the dst pointer + loop counter).
+
+### 2026-05-01 — Matt's extended-source idea for free clearing (not yet implemented)
+
+Insight: pad scroll_buffer with zero lines top + bottom. For sine-bobbing
+effects, the plot range covers the entire bob range — the zero-padded
+source naturally writes zeros where text isn't, eliminating the need
+for an explicit clear.
+
+Math (Type 1, bob ±20, current 34-line source × 2 = 68 dest lines):
+- Current: 10,880 bytes plot + 21,000 bytes clear = 31,880 bytes/frame
+- Extended (54-line source = 10 top + 34 text + 10 bottom): 17,280
+  bytes plot, no clear = 17,280 bytes/frame
+- **Save ~14.6KB / frame ≈ ~30-50 sl per VBL of work**
+
+Trade-off: static effects (Type 0, Type 6) that don't bob get pure
+cost from extra lines. Solution: hybrid scroll_buffer where Type 0/6
+read from `scroll_buffer + offset_top * line_bytes` (skip top padding,
+read 34 active lines). Sine effects read full padded source.
+
+Status: TODO (Matt suggested mid-session, not yet implemented).
+

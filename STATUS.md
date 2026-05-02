@@ -1,6 +1,79 @@
 # Stargoose Cracktro STE — Session Status
 
-Last updated: 2026-04-30, session 5c — full intro feature-complete
+Last updated: 2026-05-01, session 6 — performance pass
+
+## Session 6 — Performance: 1 VBL goal
+
+**Starting state (HRDB measurement):**
+- Effect 0: 70% @ 2 VBL, 30% @ 3 VBL
+- Effects 1-7: 4-6 VBL each
+
+**Current state after session 6:**
+- Effect 0: 2 VBL (was working at 1 VBL with in-screen architecture, but
+  reverted — see "Reverted: in-screen architecture" below)
+- **Effects 1-7: 2 VBL** ← was 4-6 VBL, big win
+
+**Target:** all effects @ 1 VBL like the 1988 original.
+
+### Wins committed this session
+
+| Commit | Description | Saving |
+|--------|-------------|--------|
+| `1cc3dbc` | In-screen scroll-row (CONFO.S `type6` trick) for Type 0 | ~22 sl |
+| `635256e` | Phase 1 polish: glyph LUT + ShiftAndFill movem groups + a5 hoist | ~3 sl |
+| `8c98092` | `PROFILE_ENABLED` toggle: color-bar timing of ScrollerStepVblank | (debug aid) |
+| `7dee278` | Timer-B HBL: encoded markers + TBDR=2 → ~50 sl/VBL of work | ~50 sl |
+| `ff04fb4` | **Reverted** in-screen architecture (broke effects 1-7) | (-22 sl on Type 0) |
+| `0ba5f76` | ClearScrollerRegion: movem.l-based clear (13 regs) | ~40-50 sl |
+
+### Reverted: in-screen architecture (1cc3dbc → ff04fb4)
+
+The CONFO.S `type6` trick puts the scroll source row at Y=160 inside the
+visible area — row 3 IS the source, no copy needed. Saved ~22 sl on
+Type 0 by dropping the 3rd row plot.
+
+**Why reverted:** for effects 1-7, `ClearScrollerRegion` clears Y=70..198
+(includes Y=160..193 = the source row), wiping the source before the
+plot reads it. AND multi-row effects (Type 1 bob extends to Y=167; Type 4
+mirror writes Y=80..193) overwrite the source area. After SwapBuffers
+the corrupted "source" becomes front, and next frame's `ScrollShiftAndFill`
+byte-fills from corrupted data → cascading source corruption.
+
+The in-screen trick is elegant for Type 0 in isolation but couldn't
+survive the rest of the effect zoo. See `OPTIM.md` for the analysis and
+discussion of the matching CONFO.S pattern.
+
+### Timer-B HBL optimization (the big win)
+
+Color-bar profiling (`PROFILE_ENABLED=1` + `RASTER_ENABLED=0`) revealed
+the gradient HBL ISR was the bottleneck — visible scroller fits in 1 VBL
+when raster is OFF, spills to 2 VBL when ON.
+
+**Two-part optimization:**
+
+1. **Encoded markers in raster_table values** — top nibble of each word
+   encodes the action: `$0RGB`=normal write, `$4xxx`=skip (no write,
+   bus-collision range), `$8RGB`/`$9RGB`/`$ARGB`=swap c1/c2/c3 + write.
+   Common path drops from ~220 cy (3 cmpa.l + range check) to ~184 cy
+   (one bmi + one btst). Static markers (skip, c3) patched in InstallHBL;
+   dynamic markers (c1, c2) managed by SetPalettePointers via OR/AND.
+
+2. **TBDR=2** — Timer-B fires every 2nd visible scanline, not every line.
+   100 fires/frame instead of 200. Phase stable (200/2=100, no remainder).
+   Gradient appears in 2-line bands. Swap markers and skip range
+   realigned to fire-aligned byte offsets (multiples of `RASTER_FIRE_STRIDE=4`).
+
+**Combined saving: ~50 sl per VBL of work.** Compounds across
+multi-VBL effects.
+
+### Movem clear (last win of session 6)
+
+`ClearScrollerRegion` rewritten to use movem.l with 13 pre-zeroed
+registers (d0-d6 + a1-a6). Per scanline: 432 cy vs 552 cy. Saves ~40-50 sl
+wallclock per Clear call (with Shifter contention). For multi-VBL effects
+this compounds — exactly what dropped them from 4-6 VBL to 2 VBL.
+
+---
 
 ## Session 5c — RATBOY's smooth-scroll trick + Real Effect 7 + sequencer
 
@@ -117,17 +190,33 @@ docs/LEARNINGS.md     accumulated learnings; "Smooth 8 px / VBL" explains the
 
 ## Remaining work
 
-* **Music re-enable + verify** (currently `MUSIC_ENABLED=1`, but worth
-  retesting after the recent changes).
-* **Polish pass** — startup glitch on first ~4 VBLs while the dual buffer
-  pipeline fills (one rightmost-pword anomaly that scrolls off after
-  ~ 1 second of run time). Could be hidden by running the shift+fill a
-  few times during init.
-* **Edge overlap on type 7** — the diverging legs of the two triangles
-  geometrically overlap at strips 0/19 because each glyph is 34 lines
-  tall. Visually the c2 letters bleed through c1 in the overlap band.
-  Could be shortened by either reducing slope or tweaking
-  `RASTER_SWAP_C2_TYPE7` to cover the worst-case extent.
+* **Effect 0 → 1 VBL.** Currently 2 VBL. Lost the ~22 sl in-screen win to
+  the architecture revert. Options:
+  - Re-introduce in-screen architecture but ONLY for effect 0 (hybrid:
+    BSS source for shift, copy to Y=160 only when effect 0 active).
+  - Find another ~22 sl in plot/shift inner loops (movem grouping in
+    plot, etc.).
+* **Effects 1-7 → 1 VBL.** Currently 2 VBL. Matt's "extended-source"
+  idea (pad scroll_buffer with zero lines so plot covers the bob range
+  and replaces the explicit clear) — could save another 30-50 sl per
+  VBL of work. Implement on Type 1 first as proof of concept, then
+  replicate.
+* **Original scrolltext + music polish** — re-test after Timer-B changes.
+
+## Profile mode (debug)
+
+Set in `src/constants.s`:
+- `PROFILE_ENABLED=1` (also requires `RASTER_ENABLED=0` and recommended
+  `MUSIC_ENABLED=0`).
+
+Effect: `ScrollerStepVblank` writes color 0 at section boundaries:
+- RED = `ScrollRenderNextPword` (every other VBL)
+- GREEN = `ScrollShiftAndFill`
+- BLUE = `ScrollPlotDispatch`
+- BLACK = idle (work complete)
+
+A blue band at the TOP of a frame indicates last frame's plot work bled
+past the VBL boundary (= 2 VBL).
 
 ## Phase progress
 
@@ -139,3 +228,4 @@ docs/LEARNINGS.md     accumulated learnings; "Smooth 8 px / VBL" explains the
 | P6c — 8 px/VBL smooth scroll | ✅ done |
 | P7 — Effect sequencer (in-text markers) | ✅ done |
 | P8 — Original scrolltext + music polish | ✅ scrolltext done |
+| P9 — Performance: all effects @ 1 VBL | 🚧 in progress (effects at 2 VBL) |

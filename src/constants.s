@@ -207,7 +207,7 @@ PALETTE_SWAP_ENTRY  equ     77                      ; line 77 = just before SCRO
 ; Bytes 1..8 in the scrolltext switch the active effect (= effects 0..7);
 ; the merged scrolltext starts with byte 1 → effect 0 — keep this matching
 ; for clean boot, or set to any 0..7 to start mid-cycle.
-SCROLL_EFFECT_DEFAULT equ   0
+SCROLL_EFFECT_DEFAULT equ   7
 
 ; ----------------------------------------------------------------------------
 ; Colors (ST-compatible palette values — $0rgb with 3 bits per channel,
