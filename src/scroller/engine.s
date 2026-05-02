@@ -417,34 +417,6 @@ ScrollShiftAndFill:
                     dbra        d7, .line
                     rts
 
-; ----------------------------------------------------------------------------
-; ScrollPlot — copy buffer pword 0..19 to all 3 screen rows of back buffer.
-; 3-way fan-out CPU. ~108 sl wallclock.
-; ----------------------------------------------------------------------------
-ScrollPlot:
-                    move.l      scroll_plot_addr, a0            ; src = pword 0
-                    move.l      back_buffer_ptr, a5
-                    lea         (SCROLL_Y_1*SCREEN_LINE_BYTES)(a5), a2
-                    lea         (SCROLL_Y_2*SCREEN_LINE_BYTES)(a5), a3
-                    lea         (SCROLL_Y_3*SCREEN_LINE_BYTES)(a5), a4
-                    move.w      #SCROLL_HEIGHT-1, d7
-.line:
-                    rept        5
-                    movem.l     (a0)+, d0-d6/a6
-                    movem.l     d0-d6/a6, (a2)
-                    lea         32(a2), a2
-                    movem.l     d0-d6/a6, (a3)
-                    lea         32(a3), a3
-                    movem.l     d0-d6/a6, (a4)
-                    lea         32(a4), a4
-                    endr
-                    addq.l      #8, a0                           ; buffer stride 168, read 160
-                    lea         24(a2), a2                       ; screen stride 184, wrote 160
-                    lea         24(a3), a3
-                    lea         24(a4), a4
-                    dbra        d7, .line
-                    rts
-
 ; ============================================================================
 ; EFFECT DISPATCHER — routes to the current effect's plot routine
 ; ============================================================================
