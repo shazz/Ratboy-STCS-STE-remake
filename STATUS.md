@@ -2,50 +2,53 @@
 
 Last updated: 2026-06-07, session 7 — channel switch effect
 
-## Session 7 — Channel switch ("TV channel flip")
+## Session 7 — Channel switch ("TV channel flip") — DONE ✅
 
 New non-1988 effect: a byte-`9` marker in the scroll text cuts the music,
 flashes full-screen analog static for ~3 s, then toggles to a different
 "channel" (logo / font / palettes / music) on the same engine — A↔B.
+Verified working + stable on Hatari (gradient + music + no crash).
 
-**Architecture (see `ARCHITECTURE.md` "Channel switch" + ADR 2026-06-07):**
+**Channel A** = the original (purple gradient backdrop, original font, thrust).
+**Channel B** = MJJ graffiti logo + HOOKER gradient-filled font (blue→magenta on
+black) + Jess / For Your Loader 1 music.
 
-- **Channel descriptor** — formerly-hardcoded asset labels are now `chan_*`
-  BSS pointers loaded by `ApplyChannel` from `channel_table`
-  (`src/data/channels.s`). Touched: `screen.s`, `vbl.s`, `hbl.s`,
-  `engine.s` (font base), `music.s`. Mirrors the palette-pointer style.
+**Architecture (see `ARCHITECTURE.md` "Channel switch" + ADRs 2026-06-07):**
+
+- **Channel descriptor** — formerly-hardcoded asset bases are now `chan_*` BSS
+  pointers loaded by `ApplyChannel` from `channel_table` (`data/channels.s`).
+  Touched: `screen.s`, `vbl.s`, `hbl.s`, `engine.s` (font base), `music.s`.
 - **Trigger** — byte 9 in `scrolltext.s`; parser sets `switch_pending`,
-  `MainLoop` runs `DoChannelSwitch` (`switch.s`) in main-loop context.
-- **Static** — `noise.s`: a screen+16 KB `noise_field` filled once with a
-  Galois LFSR, then the STE screen base is panned to a random offset each
-  frame → true 50 Hz snow for ~free. (A genuine per-frame full-screen
-  random write can't fit 50 Hz/8 MHz — see ADR.)
+  `MainLoop` runs `DoChannelSwitch` (`switch.s`) in main-loop context. The
+  scroller is NOT reset — the text continues where the marker fired.
+- **Static** — `noise.s`: a screen+16 KB `noise_field` filled once with a Galois
+  LFSR, then the STE screen base is panned to a random offset each frame → true
+  50 Hz snow, ~free.
+- **Two raster modes (`hbl.s` `ApplyChannelRaster`):** A writes the gradient to
+  colour 0 (backdrop) + font via c1/c2/c3 swaps; B writes it to **colour 1** (the
+  font's index, self-modified `GradWrite` target) leaving colour 0 black
+  (border/backcolor). B uses `raster_table_b` (logo region SKIPped) + a
+  single-index HOOKER font; no swaps.
 
-**Channel B — differentiated:**
-- **Music:** `thrust-505.sndh` (a different rip; same 3-BRA.w interface).
-- **Font:** `fuzion_fonts.png` — its glyph order (`A-Z!'()-.?:0-9,`, 8×6 grid)
-  is remapped to the engine's ASCII layout by the new
-  `tools/png2font_remap.py`. Rendered solid white via inline `font_palette_b`.
-- **Logo:** `mjj_logo74.png` (the MJJ graffiti block of `logo-mjj.png`, cropped
-  + scaled to 320×74), with its own derived palette.
+**THE big finding — music ⟷ Timer-B:** the per-scanline gradient owns Timer-B.
+A channel's tune must not grab Timer-B AND must be fast enough to fit in vblank.
+`505` rips grab Timer-B → crash; `Cassiope` is clean but too slow → muted
+gradient; **loader tunes (Jess) work**. SNDH header timer tags are NOT reliable —
+vet at runtime (see `DEBUG.md`, `$120`/`TBCR`). The VBL resets `raster_ptr`
+before the music tick so a slow replay can't delay it past the scroll rows.
 
-Both new converters are registered in `tools/build.py --assets`.
+**Tools:** new `tools/png2font_remap.py` (remaps non-ASCII / single-plane font
+PNGs into the ASCII-indexed planar layout; `--invert` option). Both new B
+converters registered in `tools/build.py --assets`.
 
-**Switch preserves scroll position:** `DoChannelSwitch` re-applies the current
-effect's palette pointers but does NOT call `ScrollerInit` — the scroll text
-continues where the marker fired instead of restarting from the top.
+**Knobs:** `NOISE_FRAMES` (flash length), `NOISE_SLACK` (snow variation),
+`SWITCH_MARKER` in `constants.s`. A **test** `dc.b SWITCH_MARKER` sits at the top
+of `scrolltext.s` ("HELLO" → switch) for fast iteration — move/remove for prod.
+Known cosmetic: HOOKER lacks `( ) - :` glyphs (its set differs) → those render
+blank on channel B; a brief old-font tail shows right after a flip.
 
-**New/changed files:** `src/switch.s`, `src/noise.s`, `src/data/channels.s`,
-`tools/png2font_remap.py` (new); indirection edits in `main.s`, `screen.s`,
-`vbl.s`, `hbl.s`, `music.s`, `scroller/engine.s`, `constants.s`, `data/font.s`,
-`data/background.s`, `data/music.s`. A **test** `dc.b SWITCH_MARKER` sits at the
-top of `scrolltext.s` ("HELLO" → switch) for fast iteration.
-
-**Knobs:** `NOISE_FRAMES` (flash length), `NOISE_SLACK` (snow variation) in
-`constants.s`.
-
-**Next idea:** channel B font filled with the raster gradient (encode the font
-inverted so the glyph body = index 0); single-plane `hooker.png` font suits this.
+**Next: 1-VBL performance.** The plan is parked in **`PERF_REVIEW.md`** (blitter
+clear/plot, TBDR=3, self-modifying Timer-B handler).
 
 ## Session 6 — Performance: 1 VBL goal
 

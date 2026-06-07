@@ -13,8 +13,11 @@ music_sndh_file:
                     incbin      'assets/thrust.snd'
                     even
 
-; Channel B music — a different rip of the tune (SNDH "505"). Same 3-BRA.w
-; entry interface, so the music.s wrapper drives it unchanged.
+; Channel B music — "Jess / For Your Loader 1". A loader tune: its replay is
+; lightweight and fits in vblank, so it does NOT overrun into the visible area
+; and block the Timer-B raster (which would kill the gradient). It also leaves
+; Timer B alone. (The 505/maxYMiser rips grabbed Timer B → crash; Cassiope was
+; clean but too slow → muted gradient. Loader tunes are the right fit here.)
 music_sndh_file_b:
-                    incbin      'assets/thrust-505.sndh'
+                    incbin      'assets/jess_loader1.sndh'
                     even

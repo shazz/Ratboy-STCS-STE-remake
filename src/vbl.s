@@ -75,15 +75,18 @@ VBLHandler:
                     move.l      chan_logo_palette, a0   ; active channel's logo palette
                     movem.l     (a0), d0-d7
                     movem.l     d0-d7, SHIFTER_PALETTE
+
+                    ; Reset raster_ptr BEFORE the music tick. MusicSndhPlay can be
+                    ; slow (some SNDH replayers run tens of scanlines into the
+                    ; visible area); if ArmTimerBRaster ran after it, raster_ptr
+                    ; wouldn't be reset until the beam was already past the scroll
+                    ; rows → gradient drawn from a stale pointer. Arm first, play last.
+                    bsr         ArmTimerBRaster
                     ifne        MUSIC_ENABLED
                     PROFILE_COLOR $F0F                  ; Magenta = MusicSndhPlay
                     jsr         MusicSndhPlay
                     PROFILE_COLOR $000                  ; Black = idle (back from music)
                     endif
-                    ; ArmTimerBRaster: just resets raster_ptr (Timer-B is
-                    ; left running by InstallHBL — see hbl.s). Must reset
-                    ; ptr BEFORE the first visible scanline of next frame.
-                    bsr         ArmTimerBRaster
 
 .vbl_exit:
                     movem.l     (sp)+, d0-a6

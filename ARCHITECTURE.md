@@ -218,10 +218,32 @@ the active row into the `chan_*` BSS pointers that the consumers now read:
 | `hbl.s` SetPalettePointers | `font_palette_c{1,2,3}` | `chan_font_pal_c{1,2,3}` |
 | `music.s` init/play/exit | `music_sndh_file` | `chan_music_ptr` |
 
-Channel B is currently a **scaffold duplicate** of A (same labels) — proving the
-plumbing before real B assets exist. Replace `chan1`'s entries in
-`data/channels.s` one at a time. (Scaffold constraint: B logo stays 320×74 and
-the font 48×34/64-glyph so dimension constants stay shared.)
+Channel A = the original (purple gradient backdrop, original font, `thrust.snd`).
+Channel B = **MJJ graffiti logo** (`mjj_logo74.png`, own palette) + **HOOKER**
+gradient-filled font + **Jess / For Your Loader 1** music. (Constraint: B's logo
+is 320×74 and its font 48×34/64-glyph so dimension constants stay shared.)
+
+### Two raster modes — the gradient lives on a different colour per channel
+
+The raster gradient is written per-scanline by the Timer-B ISR. Which colour
+register it targets is **self-modified** per channel (`GradWrite`'s abs.l operand
+in `hbl.s`, patched by `SetGradTargetColor0/1` — the ST 68000 has no I-cache, so
+patching code in place is safe):
+
+- **Channel A:** gradient → **colour 0** (the shared backdrop *and* border). Font
+  drawn in colours 1–14 via the c1/c2/c3 swaps. The original look.
+- **Channel B:** gradient → **colour 1** (the font's own register). Colour 0 is
+  left solid black, so the **border/backcolor stays black** and the gradient is
+  confined to the letters. The HOOKER font is single-index (glyph = index 1,
+  background = index 0); no per-row swaps.
+
+`ApplyChannelRaster` (`hbl.s`) selects the mode on switch: channel A → active
+table `raster_table` + colour 0 + `SetPalettePointers` (swaps); channel B →
+`raster_table_b` + colour 1 + no swaps. `raster_table_b` is built once at boot
+(`BuildRasterTableB`) from the gradient with the **logo region (Y<74) marked
+SKIP** — otherwise rastering colour 1 there would corrupt the 16-colour logo
+(which uses colour 1). `ArmTimerBRaster` re-arms `raster_ptr` from the active
+table each VBL.
 
 ### Trigger + sequence
 
@@ -230,13 +252,28 @@ the font 48×34/64-glyph so dimension constants stay shared.)
   consumes it and sets `switch_pending`. `MainLoop` runs `DoChannelSwitch` after
   the render step — **main-loop context, never an ISR**, so the multi-second
   blocking static phase is safe.
-- **`DoChannelSwitch` (`switch.s`):** set `noise_active` (gates the VBL) →
-  `MusicSndhExit` → mask Timer-B + install grayscale palette → static phase →
-  toggle `active_channel` + `ApplyChannel` → repaint logo into both buffers →
-  `MusicSndhInit` (new music) → re-apply the **current** effect's palette
-  pointers (`SetPalettePointers`, so the new channel's font palette loads while
-  the scroll cursor/buffers are preserved — the text continues, it does NOT
-  restart) → reinstall logo palette → unmask Timer-B → clear flags.
+- **`DoChannelSwitch` (`switch.s`):** set `noise_active` (gates the VBL) → **mask
+  Timer-B** (stop it *before* touching the music) → `MusicSndhExit` → install
+  grayscale palette → static phase → toggle `active_channel` + `ApplyChannel` →
+  repaint logo into both buffers → `MusicSndhInit` (new music) →
+  `ApplyChannelRaster` (sets the channel's raster mode; preserves the scroll
+  cursor/buffers — the text **continues**, it does not restart) → reinstall logo
+  palette → `UnmaskTimerB` → clear flags. `UnmaskTimerB` fully re-establishes
+  Timer-B (vector + IERA/IMRA + AER/DDR restore + TBDR + event-count restart).
+
+### Music ⟷ gradient constraint (Timer-B sharing)
+
+The per-scanline gradient owns **Timer-B** (the only ST timer wired to the
+display-enable line). A channel's SNDH music must therefore **(a)** not grab
+Timer-B for its own replay, and **(b)** be fast enough that its replay fits in
+vblank — a slow replay overruns into the visible area (masking interrupts) and
+starves the gradient. The `SNDH` header timer tag is **not reliable** (maxYMiser
+`505` rips declare `TC50` yet drive Timer-B at runtime → crash; `Cassiope` is
+Timer-B-clean but too slow → muted gradient). **Loader tunes** (lightweight,
+Timer-C/VBL) satisfy both — hence Jess / For Your Loader 1. Vet a candidate by
+running it under Hatari and checking the Timer-B vector (`$120`)/`TBCR` after its
+play tick (see `DEBUG.md`). The VBL also resets `raster_ptr` **before** the music
+tick so a slightly-slow replay can't push the re-arm past the scroll rows.
 
 ### Static (snow) — `noise.s`
 

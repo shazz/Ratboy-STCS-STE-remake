@@ -47,7 +47,25 @@ def build_palette(reduced: list[tuple[int, int, int]]) -> tuple[list, dict]:
     while len(palette) < 16:
         palette.append((0, 0, 0))
     palette = palette[:16]
-    return palette, {c: i for i, c in enumerate(palette)}
+    # First-occurrence wins: the black padding entries (indices >0) must NOT
+    # overwrite black→0. A plain dict comprehension takes the LAST index, which
+    # maps black to 15 and breaks single-index 2-colour fonts (cell background
+    # lands on colour 15 instead of 0). setdefault keeps the pinned index 0.
+    idx_of: dict[tuple[int, int, int], int] = {}
+    for i, c in enumerate(palette):
+        idx_of.setdefault(c, i)
+    return palette, idx_of
+
+
+def build_inverted(reduced: list[tuple[int, int, int]]) -> tuple[list, dict]:
+    """Two-index INVERTED mapping for gradient-filled letters: glyph body →
+    index 0 (so the per-scanline raster gradient written to color 0 fills the
+    letters), background → index 1 (a solid surround set by the font palette
+    swap). Luminance threshold; suits a clean 2-color (single-plane) source.
+    The .pal is unused at runtime (font_palette_b is inline in data/font.s)."""
+    idx_of = {c: (1 if sum(c) < 96 else 0) for c in set(reduced) | {(0, 0, 0)}}
+    palette = [(0, 0, 0)] * 16  # placeholder; runtime palette is font_palette_b
+    return palette, idx_of
 
 
 def extract_glyph(reduced, w, h, gx, gy):
@@ -70,14 +88,18 @@ def main() -> int:
     ap.add_argument("--rows", type=int, default=6)
     ap.add_argument("--cellw", type=int, default=pf.GLYPH_W_SRC)
     ap.add_argument("--cellh", type=int, default=pf.GLYPH_H)
+    ap.add_argument("--invert", action="store_true",
+                    help="glyph body → index 0 (raster gradient fills the letters), "
+                         "background → index 1 (solid surround)")
     a = ap.parse_args()
 
     img = Image.open(a.png).convert("RGB")
     w, h = img.size
     reduced = reduce_palette(list(img.getdata()), max_colors=16)
-    palette, idx_of = build_palette(reduced)
+    palette, idx_of = build_inverted(reduced) if a.invert else build_palette(reduced)
     print(f"png2font_remap: {Path(a.png).name} — {w}×{h}, "
-          f"{a.cols}×{a.rows} grid, {len(a.order)} source glyphs")
+          f"{a.cols}×{a.rows} grid, {len(a.order)} source glyphs"
+          f"{' (inverted: gradient-filled)' if a.invert else ''}")
 
     out = Path(a.out_prefix)
     out.parent.mkdir(parents=True, exist_ok=True)

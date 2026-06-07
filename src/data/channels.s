@@ -35,14 +35,18 @@ chan0:
                     dc.l    font_palette_c2
                     dc.l    font_palette_c3
 chan1:
-                    ; Channel B — being differentiated one asset at a time.
-                    dc.l    top_logo_bitmap_b       ; DONE: MJJ graffiti logo
-                    dc.l    top_logo_palette_b      ; DONE: MJJ logo palette
-                    dc.l    font_bitmap_b           ; DONE: fuzion font
-                    dc.l    music_sndh_file_b       ; DONE: thrust-505.sndh
-                    dc.l    font_palette_b          ; DONE: fuzion white palette
-                    dc.l    font_palette_b
-                    dc.l    font_palette_b
+                    ; Channel B — fully differentiated: MJJ graffiti logo, HOOKER
+                    ; gradient-filled font, Jess loader music.
+                    dc.l    top_logo_bitmap_b       ; MJJ graffiti logo
+                    dc.l    top_logo_palette_b      ; MJJ logo palette
+                    dc.l    font_bitmap_b           ; HOOKER font (gradient via colour-1 raster)
+                    dc.l    music_sndh_file_b       ; Jess / For Your Loader 1
+                    ; Font-palette fields are UNUSED by channel B (its letters are
+                    ; the colour-1 raster gradient, not a per-row swap palette — see
+                    ; ApplyChannelRaster / data/font.s). Kept as valid pointers.
+                    dc.l    font_palette_c1
+                    dc.l    font_palette_c2
+                    dc.l    font_palette_c3
 
 ; ----------------------------------------------------------------------------
 ; noise_palette — 16 distinct STE grays (black→white) for the static flash.

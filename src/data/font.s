@@ -31,22 +31,15 @@ font_palette_c2:
 font_palette_c3:
                     incbin      'build/font_c3.pal' ; cyan gradient
 
-                    ; --- Channel B font (fuzion) — remapped to ASCII layout by
-                    ; tools/png2font_remap.py. Same 48×34 / 64-glyph geometry, so
-                    ; the engine reads it via chan_font_base unchanged. font_b.pal
-                    ; is its native grayscale palette (wire to chan_font_pal_* when
-                    ; channel B gets its own colors).
+                    ; --- Channel B font (HOOKER) — single-plane 2-colour source,
+                    ; remapped to ASCII layout by tools/png2font_remap.py: glyph
+                    ; body = index 1, background = index 0. Channel B paints the
+                    ; letters via the colour-1 raster gradient (see hbl.s
+                    ; BuildRasterTableB + the GradWrite self-mod target) and leaves
+                    ; colour 0 (= border/backcolor) black — so there is NO per-row
+                    ; swap palette for channel B (unlike A's c1/c2/c3). Same
+                    ; 48×34 / 64-glyph geometry; the engine reads it via
+                    ; chan_font_base unchanged.
                     even
 font_bitmap_b:
                     incbin      'build/font_b.bin'
-
-                    ; Channel B font palette: the fuzion glyphs are ~2-tone
-                    ; (body on indices 4 & 15 + minor AA), so a solid bright
-                    ; ramp renders them as clean white letters — legible and
-                    ; visibly distinct from channel A's purple gradient. Index 0
-                    ; stays transparent (the per-scanline raster gradient).
-                    even
-font_palette_b:
-                    dc.w    $000
-                    dc.w    $777,$777,$777,$777,$777,$777,$777
-                    dc.w    $777,$777,$777,$777,$777,$777,$777

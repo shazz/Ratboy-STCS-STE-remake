@@ -104,8 +104,13 @@ CONVERTERS = [
     # 3-row palette variants (c2, c3) — we only need their .pal files, .bin is discarded
     (ASSETS / "font40x34_c2.png", BUILD / "font_c2", "png2font.py", (".pal", ".bin")),
     (ASSETS / "font40x34_c3.png", BUILD / "font_c3", "png2font.py", (".pal", ".bin")),
-    # Channel B font (fuzion): non-ASCII glyph order, 8×6 grid → remapped to ASCII layout
-    (ASSETS / "fuzion_fonts.png", BUILD / "font_b", "png2font_remap.py", (".pal", ".bin")),
+    # Channel B font (HOOKER): single-plane 2-color, non-ASCII glyph order →
+    # remapped to ASCII layout. NOT inverted: glyph body → index 1, background →
+    # index 0. The raster gradient is written to colour register 1 (the font),
+    # leaving colour 0 (= border/backcolor) solid black. Glyph order = HOOKER's
+    # own (A-Z !'<=>.? 0-9 ,). 5th tuple element = extra converter args.
+    (ASSETS / "HOOKER.png", BUILD / "font_b", "png2font_remap.py", (".pal", ".bin"),
+     ("--order", "ABCDEFGHIJKLMNOPQRSTUVWXYZ!'<=>.?0123456789,")),
     # Channel B logo (MJJ graffiti): mjj_logo74.png is logo-mjj.png's graffiti block
     # pre-cropped + scaled to 320×74 (the engine's logo geometry).
     (ASSETS / "mjj_logo74.png", BUILD / "mjj_logo", "png2planar.py", (".pal", ".img")),
@@ -114,13 +119,15 @@ CONVERTERS = [
 
 def regenerate_assets() -> int:
     """Run each registered converter whose outputs are missing/stale."""
-    for inp, out_prefix, tool, exts in CONVERTERS:
+    for entry in CONVERTERS:
+        inp, out_prefix, tool, exts = entry[:4]
+        extra = list(entry[4]) if len(entry) > 4 else []
         outs = [out_prefix.with_suffix(e) for e in exts]
         fresh = all(o.exists() and o.stat().st_mtime >= inp.stat().st_mtime for o in outs)
         if fresh:
             log("assets", f"{inp.name}: up to date")
             continue
-        cmd = [sys.executable, str(TOOLS / tool), str(inp), str(out_prefix)]
+        cmd = [sys.executable, str(TOOLS / tool), str(inp), str(out_prefix), *extra]
         log("assets", " ".join(cmd))
         rc = subprocess.run(cmd, cwd=ROOT).returncode
         if rc != 0:

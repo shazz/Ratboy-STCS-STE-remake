@@ -58,11 +58,11 @@ ApplyChannel:
 DoChannelSwitch:
                     movem.l     d0-d7/a0-a6, -(sp)
                     move.w      #1, noise_active        ; gate the VBL handler
-                    ifne        MUSIC_ENABLED
-                    bsr         MusicSndhExit           ; silence
-                    endif
                     ifne        RASTER_ENABLED
-                    bsr         MaskTimerB              ; stop gradient overwriting color 0
+                    bsr         MaskTimerB              ; STOP Timer B before touching music —
+                    endif                               ; the SNDH may share it; avoids a fire
+                    ifne        MUSIC_ENABLED            ; into half-torn-down replay code
+                    bsr         MusicSndhExit           ; silence
                     endif
                     bsr         InstallNoisePalette
                     bsr         DoStaticPhase           ; ~NOISE_FRAMES of snow
@@ -75,11 +75,11 @@ DoChannelSwitch:
                     ifne        MUSIC_ENABLED
                     bsr         MusicSndhInit           ; new channel's music
                     endif
-                    ; Re-apply the CURRENT effect's palette pointers so the new
-                    ; channel's font palettes load — but DON'T reset the scroller:
-                    ; the text continues where it left off, not from the top.
-                    move.w      scroll_effect_type, d0
-                    bsr         SetPalettePointers
+                    ; Configure the raster path for the new channel (A: gradient
+                    ; on colour 0 + font swaps; B: gradient on colour 1, colour 0
+                    ; black, no swaps). Does NOT reset the scroller — the text
+                    ; continues where it left off, not from the top.
+                    bsr         ApplyChannelRaster
                     bsr         InstallChannelLogoPalette
                     ifne        RASTER_ENABLED
                     bsr         UnmaskTimerB

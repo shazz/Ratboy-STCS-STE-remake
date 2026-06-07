@@ -80,15 +80,27 @@ InstallNoisePalette:
                     rts
 
 ; ----------------------------------------------------------------------------
-; MaskTimerB / UnmaskTimerB — gate the gradient ISR. MFP IPRA/IMRA clear-on-
-; write-zero semantics make bclr safe (writes 1 to other set bits = no change).
+; MaskTimerB / UnmaskTimerB — stop/restart the gradient ISR around the static
+; flash. Stop via TBCR=0 (halts event counting so the snow's grayscale palette
+; holds). Restart via the FULL SetupTimerB (vector + IERA + IMRA + TBDR + start),
+; NOT just TBCR: the switch runs MusicSndhExit/Init and both tunes are TC50
+; (Timer-C) SNDH players that reprogram the MFP, knocking out Timer-B's vector
+; and enable bits — a TBCR-only restart left the gradient dead after the flip.
 ; ----------------------------------------------------------------------------
 MaskTimerB:
-                    bclr.b      #0, MFP_IMRA
+                    move.b      #0, MFP_TBCR           ; stop Timer B
                     rts
 UnmaskTimerB:
-                    bclr.b      #0, MFP_IPRA            ; drop any pending Timer-B int
-                    bset.b      #0, MFP_IMRA
+                    ; The SNDH music exit/init (TC50, Timer-C) can disturb the MFP
+                    ; beyond Timer-B's own regs, killing the gradient. Restore the
+                    ; snapshotted DE-input edge/direction and clear any stale
+                    ; pending/in-service, then fully re-init Timer-B. All safe for
+                    ; the music (its Timer-C lives in MFP register B).
+                    move.b      mfp_aer_save, MFP_AER  ; Timer-B input edge
+                    move.b      mfp_ddr_save, MFP_DDR
+                    bclr.b      #0, MFP_ISRA           ; drop stale in-service
+                    bclr.b      #0, MFP_IPRA           ; drop stale pending
+                    bsr         SetupTimerB            ; vector + IERA/IMRA + TBDR + start
                     rts
 
 ; ----------------------------------------------------------------------------

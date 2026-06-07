@@ -163,3 +163,43 @@ indirection layer. Three sub-decisions:
   re-arms `raster_ptr` — invisible in practice.
 - Holding two full asset sets in RAM is cheap (logo 11840 B, thrust.snd 4830 B)
   vs the ~110 KB working set on a 1 MB STE.
+
+## 2026-06-07 — Channel-B gradient font on colour 1; music must not contend for Timer-B
+
+**Status:** accepted
+**Context:** Channel B should show the screen-spanning raster gradient *inside*
+the scroll letters (not as the backdrop), on a solid black border/backcolor. The
+gradient is written per-scanline by the Timer-B ISR to a single colour register.
+**Decision:**
+1. **Gradient → a different colour register per channel, via self-modifying code.**
+   Channel A keeps the gradient on colour 0 (backdrop + border). Channel B writes
+   it to colour 1 (the font's index), leaving colour 0 black. The ISR's common-path
+   write (`GradWrite`) has its abs.l destination operand patched between `$FF8240`
+   (col 0) and `$FF8242` (col 1) at switch time (`SetGradTargetColor0/1`). Zero
+   per-fire cost; safe because the ST 68000 has no instruction cache.
+2. **Channel-B font is single-index, non-inverted** (glyph = index 1, bg = index 0).
+   A second raster table `raster_table_b` (built once at boot from the gradient,
+   logo region Y<74 marked SKIP to protect the 16-colour logo's colour 1) feeds
+   the colour-1 writes; channel B uses no per-row palette swaps.
+3. **Channel B needs a Timer-B-free, vblank-fast SNDH tune.** The gradient owns
+   Timer-B (only ST timer wired to display-enable). A tune that (a) installs its
+   own Timer-B replay, or (b) has a slow replay overrunning the visible area
+   (masking interrupts), will break the gradient. Chose **Jess / For Your Loader 1**
+   (a lightweight loader tune). The VBL also re-arms `raster_ptr` *before* the
+   music tick so a slightly-slow replay can't delay it past the scroll rows.
+**Alternatives considered:**
+- *Inverted font with the gradient on colour 0* (letters = index 0): rejected —
+  colour 0 is the shared border/backcolor, so the gradient leaked outside the
+  letters (visible in the border).
+- *Per-frame "reclaim Timer-B" hack* to fight a Timer-B-grabbing tune (505):
+  rendered the gradient but the two replayers' vector save/restore raced →
+  **crashed** after enough switches. Rejected in favour of choosing a clean tune.
+- *Baked per-glyph gradient palette* (immune to music timing): kept as a fallback,
+  but loses the screen-spanning look.
+**Consequences:**
+- Channel B = MJJ logo + HOOKER gradient font (blue→magenta on black) + Jess
+  loader music, stable.
+- **The `SNDH` timer tag is not trustworthy** — vet a tune at runtime (Hatari
+  debugger, `$120`/`TBCR` after its play tick). Documented in `ARCHITECTURE.md`.
+- New `tools/png2font_remap.py` remaps non-ASCII / single-plane font PNGs (custom
+  glyph order, `--invert` option) into the engine's ASCII-indexed planar layout.
