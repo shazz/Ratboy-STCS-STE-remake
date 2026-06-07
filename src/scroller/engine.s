@@ -492,11 +492,15 @@ T0_LINE             set         T0_LINE+1
 TYPE1_ROW_Y         equ     100                     ; centered, leaves room for 68-line height
 
 ; Targeted-clear band: per-frame footprint = [base+bob-3, base+bob+70] = 74 lines.
-; Margin ±5 absorbs cross-frame bob delta (max ~5 lines/call when effect runs at
-; 4 VBL and crosses 4 LUT entries). Total cleared per frame: 84 lines vs 130 in
-; the conservative full-region clear.
-TYPE1_CLEAR_TOP_MARGIN  equ     8                       ; 3 (top of footprint) + 5 (jump margin)
-TYPE1_CLEAR_LINES       equ     84
+; The bob moves several lines BETWEEN frames (Type 1 is the slow 2×-tall plot,
+; runs at multiple VBL/frame, crossing multiple trajectory-LUT entries). If the
+; delta exceeds the margin, last frame's top/bottom glyph line sits OUTSIDE this
+; frame's clear → a residual "grey line" above/below. Margin ±10 absorbs a bob
+; delta up to ~10 lines (Type 1 at up to ~8 VBL). Total cleared: 94 lines vs 130
+; full. (Type 3 shares these constants; its plot is tiny → fast → small delta →
+; margin to spare.)
+TYPE1_CLEAR_TOP_MARGIN  equ     13                      ; 3 (footprint top) + 10 (jump margin)
+TYPE1_CLEAR_LINES       equ     94                      ; 74 footprint + 10 top + 10 bottom
 
 ScrollPlotType1:
                     ; --- Trajectory sine first (drives both clear bounds and plot Y) ---
