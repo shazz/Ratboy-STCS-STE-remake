@@ -1031,18 +1031,44 @@ type7_depth_lut:
 
 
 ; ----------------------------------------------------------------------------
-; ClearScrollerRegion / ClearScrollerRange — clear scroll-area lines.
+; ClearScrollerRegion / ClearScrollerRange — clear scroll-area lines (BLITTER).
 ;
 ; ClearScrollerRegion: clears the full conservative range Y=70..199 (130 lines).
 ; ClearScrollerRange (a0=top byte, d7=lines-1): clears N lines from a0; lets
 ; effects target only the footprint they actually touch.
 ;
-; Both use movem.l with 13 pre-zeroed regs: 184 bytes/line = 3×52 (13 longs) +
-; 28 (7 longs) per scanline → 432 cy/line vs 552 cy for individual move.l.
+; Implemented on the STE blitter. Each line is 92 words (184 bytes) at a
+; contiguous 184-byte stride (no inter-line gap). The blit writes index-0
+; (palette colour 0) into every word.
+;
+; HOG vs COOPERATIVE: we MUST use cooperative ("blit") mode, NOT hog ($C0).
+; This clear runs inside ScrollerStepVblank ~40-60 scanlines into the frame,
+; i.e. while the visible region — and the per-scanline raster gradient driven
+; by MFP Timer-B — is still being drawn. Hog mode stalls the CPU until the
+; whole blit finishes, deferring the Timer-B interrupt for ~24-47 scanlines
+; and freezing the gradient. Cooperative mode releases the bus every 64 cycles
+; so Timer-B keeps firing. We use Atari's officially-advertised fast-restart
+; idiom (bset #7 / nop / bne) which reaches ~90% of hog throughput while still
+; servicing interrupts within 64 cycles. A plain `btst #7` wait loop would
+; HANG the blitter in cooperative mode — do not use it here.
+;
+; OP=0 forces every written bit to 0 (the clear); the source is never read
+; meaningfully, so HOP=2 (source) is just the cheapest setting (1 NOP/word per
+; the HOP/LOP timing table). SKEW/FXSR/NFSR are all 0 (plain word-aligned).
+;
+; Register stride math: per line the blitter increments dest by XINC for the
+; first 91 words then closes the line with YINC (X is latched, not incremented
+; on the last word): (XCOUNT-1)*XINC + YINC = 91*2 + 2 = 184 = SCREEN_LINE_BYTES.
+;
+; Clobbers d1/a0 only (plus d7, which is an input). Old movem version clobbered
+; d0-d6/a1-a6; both call sites — ScrollPlotType1, ScrollPlotType3 — reload all
+; live regs after the call, so the narrower clobber is safe.
 ; ----------------------------------------------------------------------------
 CLEAR_START_Y       equ     70
 CLEAR_END_Y         equ     199                     ; extended to cover full reflection
 CLEAR_HEIGHT        equ     CLEAR_END_Y-CLEAR_START_Y   ; 130 lines
+
+CLEAR_WORDS         equ     SCREEN_LINE_WORDS       ; 92 words = 184 bytes per line
 
 ClearScrollerRegion:
                     move.l      back_buffer_ptr, a0
@@ -1052,29 +1078,40 @@ ClearScrollerRegion:
 
 ClearScrollerRange:
                     PROFILE_COLOR $FF0                  ; Yellow = Clear
-                    moveq       #0, d0
-                    move.l      d0, d1
-                    move.l      d0, d2
-                    move.l      d0, d3
-                    move.l      d0, d4
-                    move.l      d0, d5
-                    move.l      d0, d6
-                    move.l      d0, a1
-                    move.l      d0, a2
-                    move.l      d0, a3
-                    move.l      d0, a4
-                    move.l      d0, a5
-                    move.l      d0, a6
-.clear_line:
-                    movem.l     d0-d6/a1-a6, (a0)
-                    lea         52(a0), a0
-                    movem.l     d0-d6/a1-a6, (a0)
-                    lea         52(a0), a0
-                    movem.l     d0-d6/a1-a6, (a0)
-                    lea         52(a0), a0
-                    movem.l     d0-d6, (a0)
-                    lea         28(a0), a0
-                    dbra        d7, .clear_line
+                    move.l      a0, d1                  ; preserve caller's dest top
+                    addq.w      #1, d7                  ; d7 = line count (was lines-1)
+                    lea         BLITTER, a0
+
+                    ; --- Source: unused (OP=0), but point it somewhere safe ---
+                    move.w      #0, BLIT_SRC_XINC(a0)
+                    move.w      #0, BLIT_SRC_YINC(a0)
+                    move.l      d1, BLIT_SRC_ADDR(a0)   ; dummy = dest (never read with OP=0)
+
+                    ; --- Endmasks: write every bit ---
+                    move.w      #$FFFF, BLIT_EMASK1(a0)
+                    move.w      #$FFFF, BLIT_EMASK2(a0)
+                    move.w      #$FFFF, BLIT_EMASK3(a0)
+
+                    ; --- Destination: caller's a0 (top byte) preserved in d1 ---
+                    move.w      #2, BLIT_DST_XINC(a0)               ; next word
+                    move.w      #SCREEN_LINE_BYTES-(CLEAR_WORDS-1)*2, BLIT_DST_YINC(a0)  ; = 2
+                    move.l      d1, BLIT_DST_ADDR(a0)
+
+                    ; --- Counts ---
+                    move.w      #CLEAR_WORDS, BLIT_XCOUNT(a0)       ; 92 words/line
+                    move.w      d7, BLIT_YCOUNT(a0)
+
+                    ; --- Operation: HOP=source (cheapest), OP=0 (target bits all 0) ---
+                    move.b      #2, BLIT_HOP(a0)
+                    move.b      #0, BLIT_OP(a0)
+                    move.b      #0, BLIT_SKEW(a0)       ; SKEW=0, FXSR=0, NFSR=0
+
+                    ; --- Start cooperative + Atari fast-restart loop ---
+                    move.b      #$80, BLIT_CTRL(a0)     ; start, bit6 clear = blit (cooperative) mode
+.restart:
+                    bset.b      #7, BLIT_CTRL(a0)       ; re-trigger; Z reflects pre-set busy state
+                    nop                                 ; let the blitter grab the bus
+                    bne.s       .restart                ; still busy → keep restarting
                     rts
 
 ; ----------------------------------------------------------------------------
