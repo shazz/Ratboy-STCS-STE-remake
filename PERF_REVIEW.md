@@ -68,8 +68,12 @@ fire. **No action needed** — the switch feature does not stand between us and 
 | 3 | **TBDR=3** (67 fires, 3-line bands) | ~12 sl/VBL | all | Med (phase/jitter) |
 | 4 | **Cheaper 3-row render for Type 0/7** (blit/replicate, like the original) | ~40–90 sl | 0, 7 | Med–High |
 
-Also DONE (banked): remaining per-frame/per-strip `mulu #184` and `muls` removed
-(→ `y_offset_lut` + conditional negate) across Type1/3/4.
+Also DONE (banked):
+- Remaining per-frame/per-strip `mulu #184` + `muls` removed (→ `y_offset_lut`
+  + conditional negate) across Type1/3/4.
+- **Type 0 plot unrolled** (REPT + baked `(d16,An)` displacements) — removed the
+  per-line `dbra` + 18 `lea`/line → ~5–6 sl on the most-run effect.
+- **Self-modifying Timer-B handler** (Tier 2 below) — ~7 sl/VBL, shared.
 
 **#1 Blitter clear** is the cleanest big win and was scoped in `OPTIM.md` but
 never implemented (the code still CPU-clears at `engine.s:1053`). The blitter
@@ -123,16 +127,18 @@ Tier 1 lands.
   patch absolute screen displacements into the unrolled plot at `SwapBuffers`
   time instead of indexing off `back_buffer_ptr` in a register. Saves a handful
   of cy/line — marginal, and it fights the unrolled-displacement scheme.
-- **Timer-B handler:** the original's ~30 cy path used per-effect self-modifying
-  code instead of our data-driven markers. Going fully self-modifying could trim
-  the ISR toward ~120–140 cy/fire (from 184). At 100 fires that's **~13 sl/VBL**
-  — this is the one self-mod idea with real payoff, and it stacks with TBDR=3.
+- **Timer-B handler — ✅ DONE.** Self-modified the read pointer into `GradRead`'s
+  abs.l operand (eliminates the a0 save/restore + the `raster_ptr` memory
+  round-trip) and collapsed the marker decode to one branch (`cmp #$1000 / bhs`
+  → cold path). ~184 → ~148 cy/fire = **~7 sl/VBL**. The data-driven markers were
+  already lean, so the realized gain is below the original ~13-sl ceiling estimate.
+  Stacks with TBDR=3 if that lands later.
 
-**Verdict on Tier 2:** the self-modifying *Timer-B handler* (~13 sl/VBL) is worth
-it because ISR cost is shared and compounding. The dispatch/dest patches and the
-unroll are each <3 sl — bank them last. Self-mod is harmless here (we already
-patch `raster_table` markers at runtime), but keep it confined to the ISR and
-document every patched site (per the change-discipline rules).
+**Verdict on Tier 2:** the self-modifying *Timer-B handler* (done, ~7 sl/VBL) was
+worth it — ISR cost is shared and compounding. The dispatch/dest patches and the
+source-rewind unroll are each <3 sl — bank them last. Self-mod is harmless here
+(we already patch `raster_table` markers + `GradWrite`/`GradRead` operands at
+runtime), but keep it confined to the ISR and document every patched site.
 
 ### TIER 3 — architectural (high effort, high ceiling)
 
@@ -149,13 +155,13 @@ document every patched site (per the change-discipline rules).
 
 ## 4. Recommended attack order
 
-1. **Blitter clear** (Tier 1 #1) — biggest, cleanest; likely lands Effects 1–7
-   at 1 VBL on its own. Use `ste-blitter-expert`.
-2. **TBDR=3** (Tier 1 #3) — low effort, shared, authentic; re-profile.
-3. **Self-modifying Timer-B handler** (Tier 2) — ~13 sl/VBL shared, stacks with #2.
-4. If Type 0 still spills: **blitter plot** (Tier 1 #2) or **2-row Type 0**
-   (Tier 1 #4, behind a constant to A/B the look).
-5. **Unroll + source-rewind** (Tier 2) — bank the final few scanlines.
+1. **Blitter clear** (Tier 1 #1) — ✅ DONE.
+2. **TBDR=3** (Tier 1 #3) — low effort, shared, authentic; re-profile. STILL OPEN.
+3. **Self-modifying Timer-B handler** (Tier 2) — ✅ DONE (~7 sl/VBL shared).
+4. If Type 0 still spills: **blitter plot** (Tier 1 #2) — the dominant remaining
+   cost; the original's cheap-3-row secret. STILL OPEN, biggest lever left.
+5. **Unroll + source-rewind** (Tier 2) — Type 0 unroll ✅ DONE; source-rewind for
+   the 2× effects still open (small).
 
 Re-measure with HRDB / color-bar profiling (`PROFILE_ENABLED=1`,
 `RASTER_ENABLED=0` to isolate, then ON to confirm) after each step — a blue band
