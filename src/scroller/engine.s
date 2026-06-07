@@ -583,23 +583,21 @@ ScrollPlotType1:
                     adda.l      d7, a1
                     adda.w      d0, a1
 
-                    ; Copy 34 source lines → 68 dest lines (2× vertical)
-                    move.w      #SCROLL_HEIGHT-1, d4
-.scanline:
-                    move.l      (a0), d0                ; planes 0,1
-                    move.l      4(a0), d1               ; planes 2,3
-
-                    ; Write line N
-                    move.l      d0, (a1)
-                    move.l      d1, 4(a1)
-                    ; Write line N+1 (vertical double)
-                    move.l      d0, SCREEN_LINE_BYTES(a1)
-                    move.l      d1, SCREEN_LINE_BYTES+4(a1)
-
-                    ; Advance: source +1 line, dest +2 lines
-                    lea         SCROLL_BUFFER_LINE_BYTES(a0), a0
-                    lea         SCREEN_LINE_BYTES*2(a1), a1
-                    dbra        d4, .scanline
+                    ; Copy 34 source lines → 68 dest lines (2× vertical).
+                    ; Unrolled with baked (d16,An) displacements — no lea/dbra
+                    ; per line. a0/a1 stay at the strip base (the .strip loop
+                    ; recomputes them next iter). Src +L*168; dest line 2L at
+                    ; L*368, line 2L+1 at +184. Max disp ~12.3K < ±32K.
+T1L                 set         0
+                    rept        SCROLL_HEIGHT
+                    move.l      (T1L*SCROLL_BUFFER_LINE_BYTES,a0), d0
+                    move.l      (T1L*SCROLL_BUFFER_LINE_BYTES+4,a0), d1
+                    move.l      d0, (T1L*SCREEN_LINE_BYTES*2,a1)
+                    move.l      d1, (T1L*SCREEN_LINE_BYTES*2+4,a1)
+                    move.l      d0, (T1L*SCREEN_LINE_BYTES*2+SCREEN_LINE_BYTES,a1)
+                    move.l      d1, (T1L*SCREEN_LINE_BYTES*2+SCREEN_LINE_BYTES+4,a1)
+T1L                 set         T1L+1
+                    endr
 
                     dbra        d6, .strip
                     rts

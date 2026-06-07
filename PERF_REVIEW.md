@@ -35,11 +35,11 @@ sitting right on the boundary and two costs push us over:
 
 ### A. The plot (video-RAM writes, contended) — dominant
 - **Type 0 / Type 7 write 3 rows** = 3 × 34 lines × 160 B = **16,320 B/frame**.
-  This is the dominant cost. NOTE (corrected): the **1988 original also has 3
-  scroller rows** and still hits 1 VBL — so the row count isn't the
-  differentiator; the original renders 3 rows *cheaper* than our CPU `movem`
-  plot (likely a blitter / row-replication trick — see `WRITE_UP.md`). Plot ≈
-  **~160 sl** for Type 0 (`engine.s:457`).
+  This is the dominant cost. NOTE: the **1988 original also has 3 scroller rows**
+  and still hits 1 VBL — so the row count isn't the differentiator. Crucially the
+  original ran on an **STF, which has NO blitter** (blitter is STE-only), so its
+  cheaper 3-row render is a *CPU* trick (source-rewind / beam-timing — see
+  `WRITE_UP.md`), NOT a blitter. Plot ≈ **~160 sl** for Type 0 (`engine.s:457`).
 - Effects 1 & 3 write a row (+ deformation) **plus a clear** (`ClearScrollerRegion`
   130 lines / targeted `ClearScrollerRange`). The clear was CPU `movem` — now
   **blitter** (DONE, see §3 #1).
@@ -66,13 +66,15 @@ fire. **No action needed** — the switch feature does not stand between us and 
 | 1 | **Blitter for the clear** (`ClearScrollerRegion`/`Range`) — ✅ DONE | ~30–80 sl | 1, 3 | Low–Med |
 | 2 | ~~Blitter for the plot~~ — ❌ TRIED, **~25 sl SLOWER** (cooperative copy ≈ CPU; see PROFILE.md) | — | — | — |
 | 3 | **TBDR=3** (67 fires, 3-line bands) | ~12 sl/VBL | all | Med (phase/jitter) |
-| 4 | **Cheaper 3-row render for Type 0/7** (blit/replicate, like the original) | ~40–90 sl | 0, 7 | Med–High |
+| 4 | **Cheaper 3-row render for Type 0/7** — CPU source-rewind/beam-timing (STF original had no blitter; NOT a blit) | ~?? | 0, 7 | High |
 
-Also DONE (banked):
+Also DONE (banked) this session:
 - Remaining per-frame/per-strip `mulu #184` + `muls` removed (→ `y_offset_lut`
   + conditional negate) across Type1/3/4.
-- **Type 0 plot unrolled** (REPT + baked `(d16,An)` displacements) — removed the
-  per-line `dbra` + 18 `lea`/line → ~5–6 sl on the most-run effect.
+- **Type 0 & Type 4 plot loops unrolled** (REPT + baked `(d16,An)` displacements,
+  no per-line `dbra`/`lea`): ~5 sl (Type 0), ~29 sl (Type 4 — was the slowest).
+- **Type 3 clear**: full `ClearScrollerRegion` → targeted `ClearScrollerRange`
+  (~46 sl — Type 3 was the only clear-bound effect).
 - **Self-modifying Timer-B handler** (Tier 2 below) — ~7 sl/VBL, shared.
 
 **#1 Blitter clear** is the cleanest big win and was scoped in `OPTIM.md` but
@@ -82,11 +84,14 @@ clears ~2 cy/word and overlaps CPU; a 130-line clear drops from ~130 sl to
 `ste-blitter-expert` agent; mind the end-of-op quirk and HOG-vs-cooperative
 choice.
 
-**#2 Blitter plot** moves the dominant memory-bandwidth work off the CPU. The
-CPU sets up the blit and can do the *next* frame's `ShiftAndFill` (system RAM)
-while the blitter copies to screen — true overlap. This is the STE-native route
-to 1 VBL for the 3-row effects. Higher complexity (per-strip blits for the
-deformed effects; straight rectangular blits for Type 0).
+**#2 Blitter plot — ❌ TRIED, NEGATIVE RESULT (reverted; see PROFILE.md).** A
+cooperative copy-blit on Type 0 measured **~25 sl SLOWER** than the CPU `movem`.
+The plot runs in the visible region so the blit must be cooperative (hog freezes
+the gradient); the 64-cy yields + `bset/nop/bne` busy-wait + a copy's read+write
+traffic land it ≈/worse than the CPU (which also read-shares the 3 rows). The
+clear won only because it is write-only. The ONLY remaining blitter angle is
+genuine CPU/blit **overlap** (do `ShiftAndFill` in the blit's yield slots, not a
+busy-wait) — a large, uncertain restructure. Parked.
 
 **#3 TBDR=3** is shared overhead reduction; smaller than it was pre-session-6
 (~12 sl now, not the old ~45) because the handler is already lean, but it is
@@ -94,12 +99,13 @@ deformed effects; straight rectangular blits for Type 0).
 did. Needs the same phase-stability care as TBDR=2 (200/3 has a remainder →
 verify marker fire-alignment, see `hbl.s` stride notes).
 
-**#4 Cheaper 3-row rendering for Type 0/7.** CORRECTION: the 1988 original DOES
-have 3 scroller rows (it does NOT drop to 2) and still hits 1 VBL. So the fix is
-not to remove a row but to render the 3 rows *cheaper* than three CPU `movem`
-row-copies — blit/replicate, the way the original does (it may blit fewer but
-there are really 3 rows on screen). Largely the same work as #2 (blitter plot);
-see `WRITE_UP.md` for the original's exact technique.
+**#4 Cheaper 3-row rendering for Type 0/7.** The 1988 original has 3 scroller
+rows and still hits 1 VBL — on an STF with **no blitter**, so its trick is pure
+CPU: source-rewind (write a line + its neighbour from one source read) and/or
+beam-timed writes (see `WRITE_UP.md` and Tier 3 beam-racing). This is the real
+path now that #2 (blitter plot) is ruled out. The cheap slice — unrolling the
+per-strip `.scanline` loops — is being banked (Type 0, 4 done; 1 next). The
+deeper source-rewind / beam-racing is Tier 2/3.
 
 ### TIER 2 — your "autogenerated / patched code" idea (honest assessment)
 
@@ -171,8 +177,10 @@ at the *top* of a frame = last frame's plot bled past the VBL boundary.
 
 ## 5. One-line summary
 
-The cheap CPU/LUT wins are spent; **1 VBL now hinges on moving bulk video-RAM
-work to the blitter (clear, then plot) and trimming the shared Timer-B ISR
-(TBDR=3 + a self-modifying handler).** Autogenerated unrolling and other
-self-mod patches are worth a few scanlines each — bank them after the blitter
-and ISR work, not before.
+The blitter helped the **clear** (write-only) but NOT the **plot** — a
+cooperative copy is ≈/slower than the CPU (measured, reverted). The shared
+**Timer-B ISR** was trimmed (self-mod, ~7 sl/VBL) and the one clear-bound effect
+(Type 3) fixed. What remains toward 1 VBL is **CPU-side**: unroll the per-strip
+plot loops (Type 0/4 done, 1 next), then the harder **source-rewind / beam-
+racing** the STF original used — or TBDR=3 for a shared ~12 sl. The blitter plot
+is a dead end unless CPU/blit overlap is built.
