@@ -64,7 +64,7 @@ fire. **No action needed** — the switch feature does not stand between us and 
 | # | Optimization | Est. gain | Affects | Risk |
 |---|--------------|-----------|---------|------|
 | 1 | **Blitter for the clear** (`ClearScrollerRegion`/`Range`) — ✅ DONE | ~30–80 sl | 1, 3 | Low–Med |
-| 2 | **Blitter for the plot** (bulk row copy buffer→screen) | ~40–90 sl | all | Med–High |
+| 2 | ~~Blitter for the plot~~ — ❌ TRIED, **~25 sl SLOWER** (cooperative copy ≈ CPU; see PROFILE.md) | — | — | — |
 | 3 | **TBDR=3** (67 fires, 3-line bands) | ~12 sl/VBL | all | Med (phase/jitter) |
 | 4 | **Cheaper 3-row render for Type 0/7** (blit/replicate, like the original) | ~40–90 sl | 0, 7 | Med–High |
 
@@ -158,8 +158,10 @@ runtime), but keep it confined to the ISR and document every patched site.
 1. **Blitter clear** (Tier 1 #1) — ✅ DONE.
 2. **TBDR=3** (Tier 1 #3) — low effort, shared, authentic; re-profile. STILL OPEN.
 3. **Self-modifying Timer-B handler** (Tier 2) — ✅ DONE (~7 sl/VBL shared).
-4. If Type 0 still spills: **blitter plot** (Tier 1 #2) — the dominant remaining
-   cost; the original's cheap-3-row secret. STILL OPEN, biggest lever left.
+4. ~~Blitter plot~~ — ❌ TRIED & REVERTED: the cooperative copy-blit measured
+   ~25 sl SLOWER than the CPU on Type 0 (see PROFILE.md "negative result"). A
+   real win needs CPU/blit overlap (big restructure). The achievable plot wins
+   are CPU-side per-strip unrolls (e.g. Type 4's `.scanline` still uses `dbra`).
 5. **Unroll + source-rewind** (Tier 2) — Type 0 unroll ✅ DONE; source-rewind for
    the 2× effects still open (small).
 

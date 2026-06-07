@@ -62,12 +62,30 @@ render-frame cost (every other frame) is not shown — it adds to the heavy fram
 
 ## Recommended next optimisations (in priority order)
 
-1. **🥇 Blitter the PLOT** — fixes the plot-bound slow trio (**4, 7, 1**), the
-   biggest lever. Move the per-region buffer→screen copy to the cooperative
-   blitter so the CPU overlaps the next frame's shift. The original's cheap-
-   3-row secret. (`ste-blitter-expert`.)
-2. **🥈 Type 3: `ClearScrollerRegion` → targeted `ClearScrollerRange`** — clear
-   only the deformed footprint (as Type 1 does), not the full 130 lines. Small,
-   low-risk, removes the ~110-line yellow band. Quick win.
-3. Re-profile after each, ideally also sampling a *render* frame and confirming
-   with the gradient on (drop to a brief `RASTER=1` visual check).
+1. ~~**Blitter the PLOT**~~ — **TRIED, REVERTED (negative result, see below).**
+2. **Type 3: targeted clear** — ✅ DONE (`0a6304b`), ~46 sl saved on Type 3.
+3. **Achievable plot win: CPU-side per-strip unrolls** for the plot-bound
+   effects (4, 7, 1). Type 4's `.scanline` still uses `dbra`; unroll it like
+   Type 0. Modest (~few sl each) but real and low-risk.
+4. Re-profile after each, ideally sampling a *render* frame too.
+
+## Blitter plot — negative result (measured)
+
+Profiled Type 0 with a cooperative copy-blit (`ScrollBlitCopyRow`, OP=3 source)
+vs the CPU `movem` unroll (`PROFILE_ENABLED=1` / `RASTER=0`):
+
+- Unroll: blue(plot) **~140 sl** + ~25 idle.
+- Blit:   blue(plot) **~165 sl**, **0 idle** → **~25 sl SLOWER.**
+
+Why: the plot runs during the visible region, so the blit MUST be cooperative
+(hog would freeze the Timer-B gradient). Calibration from the clear: the
+cooperative CLEAR already runs ~4.7 cy/word (write-only) — ~2× theoretical
+because of the 64-cy bus yields + the `bset/nop/bne` restart busy-wait. A COPY
+is read+write (~2× the traffic), landing at ≈ or worse than the CPU's ~9 cy/word
+`movem` (which also gets read-sharing across Type 0's 3 rows). The clear won
+*only because it is write-only*; the plot is not a win under the cooperative
+constraint.
+
+A real blitter-plot win would need CPU/blit **overlap** — run the next frame's
+`ShiftAndFill` in the blit's yield slots instead of busy-waiting — a large,
+uncertain restructure. Parked. The realistic plot wins are CPU-side (unroll).
