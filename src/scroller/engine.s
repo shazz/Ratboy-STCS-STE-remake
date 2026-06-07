@@ -850,21 +850,22 @@ ScrollPlotType4:
                     adda.l      d7, a3
                     adda.w      d0, a3
 
-                    ; Plot 34 source lines: row 1 forward, row 2 backward.
-                    move.w      #SCROLL_HEIGHT-1, d4
-.scanline:
-                    move.l      (a0), d1
-                    move.l      4(a0), d2
-
-                    move.l      d1, (a1)
-                    move.l      d2, 4(a1)
-                    move.l      d1, (a3)
-                    move.l      d2, 4(a3)
-
-                    lea         SCROLL_BUFFER_LINE_BYTES(a0), a0
-                    lea         SCREEN_LINE_BYTES(a1), a1
-                    lea         -SCREEN_LINE_BYTES(a3), a3
-                    dbra        d4, .scanline
+                    ; Plot 34 source lines, row 1 forward + row 2 backward.
+                    ; Unrolled with baked (d16,An) displacements — no lea/dbra
+                    ; per line. a0/a1/a3 stay at this strip's line-0 base (the
+                    ; .strip loop recomputes them next iter). Max |disp| =
+                    ; 33*184 = 6072, inside ±32K. Src +L*168, row1 +L*184, row2
+                    ; -L*184 (upside-down).
+T4L                 set         0
+                    rept        SCROLL_HEIGHT
+                    move.l      (T4L*SCROLL_BUFFER_LINE_BYTES,a0), d1
+                    move.l      (T4L*SCROLL_BUFFER_LINE_BYTES+4,a0), d2
+                    move.l      d1, (T4L*SCREEN_LINE_BYTES,a1)
+                    move.l      d2, (T4L*SCREEN_LINE_BYTES+4,a1)
+                    move.l      d1, (-T4L*SCREEN_LINE_BYTES,a3)
+                    move.l      d2, (-T4L*SCREEN_LINE_BYTES+4,a3)
+T4L                 set         T4L+1
+                    endr
 
                     dbra        d6, .strip
                     rts
