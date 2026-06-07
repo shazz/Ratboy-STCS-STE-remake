@@ -71,7 +71,10 @@ DoChannelSwitch:
                     move.w      d0, active_channel
                     bsr         ApplyChannel
                     bsr         RestoreScreenBase       ; base → real front buffer
-                    bsr         RepaintChannel          ; clear both buffers + new logo
+                    bsr         RepaintChannel          ; clear both screen buffers + new logo
+                    bsr         ClearScrollBuffers      ; drop old-font glyph pixels so the new
+                                                        ; font scrolls in over a blank row (no
+                                                        ; A/B font mix); cursor untouched
                     ifne        MUSIC_ENABLED
                     bsr         MusicSndhInit           ; new channel's music
                     endif

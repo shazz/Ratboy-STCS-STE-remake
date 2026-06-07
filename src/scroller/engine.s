@@ -55,25 +55,34 @@ ScrollerInit:
                     move.w      #1, sine_direction      ; start moving down
                     clr.w       sine_offset
 
-                    moveq       #0, d1
-                    ; Clear scroll_buffer_a
-                    lea         scroll_buffer_a, a0
-                    move.w      #(SCROLL_BUFFER_BYTES/4)-1, d0
-.clr_a:
-                    move.l      d1, (a0)+
-                    dbra        d0, .clr_a
-                    ; Clear scroll_buffer_b
-                    lea         scroll_buffer_b, a0
-                    move.w      #(SCROLL_BUFFER_BYTES/4)-1, d0
-.clr_b:
-                    move.l      d1, (a0)+
-                    dbra        d0, .clr_b
+                    bsr         ClearScrollBuffers      ; zero both render buffers; returns d1=0
                     ; Clear scroll_next_pword (= 8 bytes × 34 lines = 272 bytes = 68 longs)
                     lea         scroll_next_pword, a0
                     move.w      #(8*SCROLL_HEIGHT/4)-1, d0
 .clr_n:
                     move.l      d1, (a0)+
                     dbra        d0, .clr_n
+                    rts
+
+; ----------------------------------------------------------------------------
+; ClearScrollBuffers — zero both scroll render buffers (the rendered glyph
+; pixels). Does NOT touch the text cursor or effect state, so the scroll
+; continues where it left off. Used by ScrollerInit and by the channel switch
+; (so the new font scrolls in over a blank row instead of mixing with the old
+; font's already-rendered pixels). Returns d1=0. Clobbers d0/d1/a0.
+; ----------------------------------------------------------------------------
+ClearScrollBuffers:
+                    moveq       #0, d1
+                    lea         scroll_buffer_a, a0
+                    move.w      #(SCROLL_BUFFER_BYTES/4)-1, d0
+.csb_a:
+                    move.l      d1, (a0)+
+                    dbra        d0, .csb_a
+                    lea         scroll_buffer_b, a0
+                    move.w      #(SCROLL_BUFFER_BYTES/4)-1, d0
+.csb_b:
+                    move.l      d1, (a0)+
+                    dbra        d0, .csb_b
                     rts
 
 ; ----------------------------------------------------------------------------
