@@ -108,9 +108,10 @@ CONVERTERS = [
     # remapped to ASCII layout. NOT inverted: glyph body → index 1, background →
     # index 0. The raster gradient is written to colour register 1 (the font),
     # leaving colour 0 (= border/backcolor) solid black. Glyph order = HOOKER's
-    # own (A-Z !'<=>.? 0-9 ,). 5th tuple element = extra converter args.
+    # own grid layout (A-Z, !'<=>., ?:, 0-9, comma — note the ':' between '?' and
+    # '0'; the <=> cells are HOOKER's logo decoration). 5th tuple = extra args.
     (ASSETS / "HOOKER.png", BUILD / "font_b", "png2font_remap.py", (".pal", ".bin"),
-     ("--order", "ABCDEFGHIJKLMNOPQRSTUVWXYZ!'<=>.?0123456789,")),
+     ("--order", "ABCDEFGHIJKLMNOPQRSTUVWXYZ!'<=>.?:0123456789,")),
     # Channel B logo (MJJ graffiti): mjj_logo74.png is logo-mjj.png's graffiti block
     # pre-cropped + scaled to 320×74 (the engine's logo geometry).
     (ASSETS / "mjj_logo74.png", BUILD / "mjj_logo", "png2planar.py", (".pal", ".img")),
