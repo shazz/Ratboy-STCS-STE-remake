@@ -1,6 +1,51 @@
 # Stargoose Cracktro STE — Session Status
 
-Last updated: 2026-06-07, session 7 — channel switch effect
+Last updated: 2026-06-07, session 8 — 1-VBL perf pass + switch polish
+
+## Session 8 — 1-VBL performance pass + switch polish
+
+**Perf wins (all verified on Hatari):**
+- Removed remaining `mulu/muls` from the plot routines (→ `y_offset_lut` +
+  conditional negate).
+- **Self-modifying Timer-B ISR** (`hbl.s`): the read pointer is baked into
+  `GradRead`'s abs.l operand (no `a0`/`raster_ptr` round-trip) and the marker
+  decode is one branch (`cmp #$1000 / bhs`) → **~7 sl/VBL**, shared by every
+  effect.
+- **Type 3 clear**: full `ClearScrollerRegion` → targeted `ClearScrollerRange`
+  (~46 sl; it was the only clear-bound effect).
+- **Type 4 & Type 1 plot loops unrolled** (REPT + baked `(d16,An)` displacements):
+  ~29 sl (Type 4, the slowest) and ~24 sl (Type 1, 2× tall). Type 0 unrolled too
+  (~5 sl).
+
+**Blitter plot — ❌ NEGATIVE RESULT (tried + reverted).** A cooperative copy-blit
+measured ~25 sl SLOWER than the CPU on Type 0. The plot runs in the visible
+region so the blit must be cooperative (hog freezes the gradient); a copy is
+read+write, so it ties/loses to `movem`. The CLEAR won only because it is
+write-only. A real plot win needs CPU/blit overlap (parked). See `PROFILE.md`.
+
+**Profiling:** added `PROFILE.md` (color-bar profile per effect). Slow effects:
+4 & 7 (plot-bound, multi-region), then 1 (plot-heavy 2×) & 3 (was clear-bound).
+
+**Switch feature polish:**
+- Trigger is now the **'M' key** (`CheckEsc`; matches ASCII `M`/`m` AND IKBD
+  scancode `$32`, robust to French TOS / Hatari AZERTY remap). The in-text byte-9
+  marker mechanism is kept but removed from the scrolltext.
+- Static shortened to ~2 s (`NOISE_FRAMES`; currently 30 ≈ 0.6 s, uncommitted).
+- **Font-mix at the flip fixed**: `ClearScrollBuffers` now zeroes both buffers
+  AND the staging `scroll_next_pword`, and `DoChannelSwitch` resets
+  `scroll_render_phase` → the new font scrolls in over a blank row, no old-font
+  mix / 8px staging remnant / blend overhang. Text still continues (cursor kept).
+
+**Bug fixes:** Type 1 erase residual (clear margin ±5→±10); Type-1 clear overflow
+CRASH (`TYPE1_CLEAR_LINES` capped to 93 so the clear never runs past Y=199 at
+peak bob — 94 corrupted memory → bus error in TOS).
+
+**Open / next session:**
+- **Exit crash** (`TODO.md`): the ESC teardown completes but leaves TOS at
+  IMASK=7 → frozen. Diagnosed, fix deferred.
+- Further 1-VBL hinges on the parked CPU/blit **overlap** or **beam-racing** (the
+  STF original had NO blitter, so its cheap-3-row trick is pure CPU). See
+  `PERF_REVIEW.md` Tier 2/3. The cheap CPU/LUT/unroll wins are now spent.
 
 ## Session 7 — Channel switch ("TV channel flip") — DONE ✅
 
@@ -42,10 +87,10 @@ PNGs into the ASCII-indexed planar layout; `--invert` option). Both new B
 converters registered in `tools/build.py --assets`.
 
 **Knobs:** `NOISE_FRAMES` (flash length), `NOISE_SLACK` (snow variation),
-`SWITCH_MARKER` in `constants.s`. A **test** `dc.b SWITCH_MARKER` sits at the top
-of `scrolltext.s` ("HELLO" → switch) for fast iteration — move/remove for prod.
-Known cosmetic: HOOKER lacks `( ) - :` glyphs (its set differs) → those render
-blank on channel B; a brief old-font tail shows right after a flip.
+`SWITCH_MARKER` in `constants.s`. (Session 8: the trigger moved to the **'M' key**
+and the test marker was removed from `scrolltext.s`; the old-font tail at a flip
+is now fixed.) Known cosmetic: HOOKER lacks `( ) - :` glyphs (its set differs) →
+those render blank on channel B.
 
 **Next: 1-VBL performance.** The plan is parked in **`PERF_REVIEW.md`** (blitter
 clear/plot, TBDR=3, self-modifying Timer-B handler).
