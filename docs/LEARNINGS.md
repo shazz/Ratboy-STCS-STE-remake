@@ -621,3 +621,72 @@ read 34 active lines). Sine effects read full padded source.
 
 Status: TODO (Matt suggested mid-session, not yet implemented).
 
+
+## Session 7 — Channel switch, gradient-on-font, music/timer fights (2026-06-07)
+
+### 2026-06-07 — Timer-B (raster) vs SNDH music vs VBL replay: who owns the timer
+
+The per-scanline raster gradient is driven by **MFP Timer-B in event-count mode**
+(the only ST timer wired to the Shifter display-enable line — so the only one
+useful for per-scanline palette work). This creates a hard contention with music:
+
+- **SNDH players can grab Timer-B for their own replay.** The maxYMiser "505"
+  rips install their handler at the Timer-B vector (`$120`) and set `TBCR` to a
+  delay mode at init/play time. That fights our gradient handler; the two
+  replayers' vector save/restore race each other and **crash** after enough
+  switches. Channel A's `thrust.snd` is fine because it uses **Timer C**.
+- **The SNDH header timer tag LIES.** All our candidates declared `TC50`
+  (Timer C) yet `505` drove Timer-B at runtime. Never trust the tag — **vet at
+  runtime**: under Hatari (DEBUG.md) check `$120` (should == `TimerBHandler`) and
+  `TBCR` (should be `$08`) right after the tune's play tick.
+- **A slow replay starves the gradient even if it's Timer-B-clean.** `Cassiope`
+  (Floopy) left Timer-B alone but its replay overran ~tens of scanlines into the
+  visible region (masking interrupts), so Timer-B couldn't fire during the scroll
+  rows → **muted/broken gradient**. The fix is a tune whose replay fits in vblank.
+- **Loader tunes are the right class** (lightweight, Timer-C/VBL): `Jess / For
+  Your Loader 1` gives gradient + music + no crash.
+- **Reset `raster_ptr` BEFORE the music tick in the VBL.** Otherwise a
+  slightly-slow replay pushes `ArmTimerBRaster` past the scroll rows and the
+  gradient draws from a stale pointer. Arm first, play last.
+
+Rule of thumb: per-scanline raster effects and the music must not both want
+Timer-B, and the music's per-tick cost must fit the top border / vblank.
+
+### 2026-06-07 — Blitter clears must be COOPERATIVE, not HOG, when a raster ISR is live
+
+Blitter-ing `ClearScrollerRange` (replacing the 13-reg `movem` clear) is faster,
+BUT the clear runs ~40-60 scanlines into the frame, while the Timer-B gradient
+is being drawn. A **HOG** blit (`$C0` in `BLIT_CTRL`) halts the CPU until the
+blit finishes, **deferring the Timer-B interrupt** → the gradient freezes for the
+blit's duration (~24-47 sl). Visible bug.
+
+Use **cooperative** mode: start with `$80` (bit7 set, bit6 clear), then the Atari
+fast-restart idiom `bset.b #7,BLIT_CTRL / nop / bne.s` — the blitter grabs the
+bus in short bursts and yields between them, so Timer-B keeps firing. (Do NOT use
+a `btst #7` busy-wait — that hangs the blitter in cooperative mode.) Reaches
+~90% of HOG throughput while keeping interrupts alive.
+
+Clear setup: `OP=0` (target bits all 0 = clear; source unread), `HOP=2`,
+`EMASK1/2/3=$FFFF`, `XCOUNT=92` words, `DST_YINC` chosen so
+`(XCOUNT-1)*XINC + YINC = SCREEN_LINE_BYTES` (= 184; X is latched on the last
+word of a line). Clobbers only d1/a0 — much narrower than the movem clear.
+
+### 2026-06-07 — Gradient on the FONT (colour 1) vs the BACKDROP (colour 0)
+
+The gradient is written to one colour register per scanline. Which register =
+what looks gradient-filled:
+- **Colour 0** = the shared backdrop AND the hardware border/backcolor. Channel A
+  writes the gradient here → gradient backdrop, letters drawn in colours 1-14.
+- **Colour 1** (or any non-0) = a foreground index. Channel B writes the gradient
+  here and leaves colour 0 black → the **letters** carry the screen-spanning
+  gradient and the border/backcolor stays solid black.
+
+To switch the target with zero per-fire cost, **self-modify the ISR's write
+instruction**: `GradWrite: move.w d0,SHIFTER_PALETTE` is abs.l (`33C0 00FF8240`);
+patch the low address byte `$40`↔`$42` (`SetGradTargetColor0/1`). Safe — the ST
+68000 has no instruction cache. Caveat: rastering a non-0 colour corrupts the
+16-colour logo in the logo region (it uses that colour), so the channel-B raster
+table (`raster_table_b`) marks the logo region (Y<74) as SKIP.
+
+This is the same self-modifying-code technique that the parked 1-VBL plan
+proposes for the Timer-B handler itself (PERF_REVIEW.md).
