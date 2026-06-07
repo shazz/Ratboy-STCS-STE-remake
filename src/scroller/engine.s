@@ -461,22 +461,25 @@ ScrollPlotType0:
                     lea         (SCROLL_Y_2*SCREEN_LINE_BYTES)(a5), a3
                     lea         (SCROLL_Y_3*SCREEN_LINE_BYTES)(a5), a4
 
-                    move.w      #SCROLL_HEIGHT-1, d7
-.line:
+                    ; Fully unrolled (REPT) with baked (d16,An) displacements:
+                    ; removes the per-line dbra and the 18 lea/line (15 inner
+                    ; chunk-advances + 3 outer strides). Max disp 33*184+4*32 =
+                    ; 6200, well inside the ±32K d16 range. Source is still read
+                    ; sequentially via (a0)+; the 8-byte buffer-line gap is
+                    ; skipped per line.
+T0_LINE             set         0
+                    rept        SCROLL_HEIGHT
+T0_CHUNK            set         0
                     rept        5
                     movem.l     (a0)+, d0-d6/a6
-                    movem.l     d0-d6/a6, (a2)
-                    lea         32(a2), a2
-                    movem.l     d0-d6/a6, (a3)
-                    lea         32(a3), a3
-                    movem.l     d0-d6/a6, (a4)
-                    lea         32(a4), a4
+                    movem.l     d0-d6/a6, (T0_LINE*SCREEN_LINE_BYTES+T0_CHUNK*32,a2)
+                    movem.l     d0-d6/a6, (T0_LINE*SCREEN_LINE_BYTES+T0_CHUNK*32,a3)
+                    movem.l     d0-d6/a6, (T0_LINE*SCREEN_LINE_BYTES+T0_CHUNK*32,a4)
+T0_CHUNK            set         T0_CHUNK+1
                     endr
-                    addq.l      #8, a0                  ; buffer stride = 168, read 160
-                    lea         24(a2), a2              ; screen stride = 184, wrote 160
-                    lea         24(a3), a3
-                    lea         24(a4), a4
-                    dbra        d7, .line
+                    addq.l      #8, a0                  ; skip 8-byte buffer-line gap
+T0_LINE             set         T0_LINE+1
+                    endr
                     rts
 
 ; ----------------------------------------------------------------------------
