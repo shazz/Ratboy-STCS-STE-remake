@@ -149,7 +149,8 @@ manager.
 | ------- | --------------------------------- |
 | `0`     | NULL — wrap cursor back to start  |
 | `1..8`  | Effect-change marker (= effect N-1) |
-| `9..31` | Reserved (treated as glyph index 0 = space) |
+| `9`     | Channel-switch marker (TV-static flip A↔B) |
+| `10..31`| Reserved (treated as glyph index 0 = space) |
 | `32..95`| Printable ASCII glyph              |
 | `96+`   | Out of range, clamped to space     |
 
@@ -157,6 +158,15 @@ Effect N-1 means: byte `1` → effect 0, byte `2` → effect 1, ..., byte
 `8` → effect 7. The original RATBOY 1988 code used bytes 1..7 directly
 as effects 1..7 (no effect 0); we extended the range to byte 8 so all
 8 of our effects are addressable.
+
+**Byte `9` — channel switch.** A non-1988 effect: the parser sets
+`switch_pending` and `MainLoop` runs `DoChannelSwitch` (`switch.s`) — music
+cuts, the screen fills with analog static (`noise.s`) for `NOISE_FRAMES`,
+then the active channel toggles A↔B (logo / font / palettes / music all swap
+via the `channel_table` descriptor in `src/data/channels.s`) and the scroll
+restarts. Place a `dc.b SWITCH_MARKER` (= 9) anywhere in the text to flip;
+the marker is consumed, never rendered. See `ARCHITECTURE.md` "Channel switch"
+and ADR 2026-06-07. Tune the flash length with `NOISE_FRAMES` in `constants.s`.
 
 ### How it parses
 

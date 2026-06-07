@@ -1,6 +1,39 @@
 # Stargoose Cracktro STE — Session Status
 
-Last updated: 2026-05-01, session 6 — performance pass
+Last updated: 2026-06-07, session 7 — channel switch effect
+
+## Session 7 — Channel switch ("TV channel flip")
+
+New non-1988 effect: a byte-`9` marker in the scroll text cuts the music,
+flashes full-screen analog static for ~3 s, then toggles to a different
+"channel" (logo / font / palettes / music) on the same engine — A↔B.
+
+**Architecture (see `ARCHITECTURE.md` "Channel switch" + ADR 2026-06-07):**
+
+- **Channel descriptor** — formerly-hardcoded asset labels are now `chan_*`
+  BSS pointers loaded by `ApplyChannel` from `channel_table`
+  (`src/data/channels.s`). Touched: `screen.s`, `vbl.s`, `hbl.s`,
+  `engine.s` (font base), `music.s`. Mirrors the palette-pointer style.
+- **Trigger** — byte 9 in `scrolltext.s`; parser sets `switch_pending`,
+  `MainLoop` runs `DoChannelSwitch` (`switch.s`) in main-loop context.
+- **Static** — `noise.s`: a screen+16 KB `noise_field` filled once with a
+  Galois LFSR, then the STE screen base is panned to a random offset each
+  frame → true 50 Hz snow for ~free. (A genuine per-frame full-screen
+  random write can't fit 50 Hz/8 MHz — see ADR.)
+
+**Scaffold state:** channel B in `data/channels.s` is a **duplicate of A**
+(same labels). A switch currently looks like *static flash → identical
+screen + music restart* — that proves the plumbing. **Next:** replace
+`chan1` entries one at a time with `_b` assets (logo, font, palettes, 2nd
+`.snd`) and re-verify each.
+
+**New/changed files:** `src/switch.s`, `src/noise.s`, `src/data/channels.s`
+(new); indirection edits in `main.s`, `screen.s`, `vbl.s`, `hbl.s`,
+`music.s`, `scroller/engine.s`, `constants.s`. A **test** `dc.b SWITCH_MARKER`
+sits after the effect-1 segment in `scrolltext.s` — move or delete it.
+
+**Knobs:** `NOISE_FRAMES` (flash length), `NOISE_SLACK` (snow variation) in
+`constants.s`.
 
 ## Session 6 — Performance: 1 VBL goal
 

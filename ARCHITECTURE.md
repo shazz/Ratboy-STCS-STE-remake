@@ -194,3 +194,53 @@ Transitions are time-driven (via `vbl_counter`). ESC poll in main loop triggers 
 
 Fits trivially on a 512 KB STE. Double-height (40×68) rendering is CPU/blitter work at
 render time — no extra bitmap storage.
+
+## Channel switch ("TV channel flip")
+
+A new (non-1988) effect: the demo can "change channel" mid-scroll — music cuts,
+the whole screen fills with analog-TV static for a few seconds, then the screen
+"comes back" as a different broadcast (different logo, font, palettes, music)
+on the same engine. It toggles between two channels (A↔B).
+
+### Channel descriptor (indirect asset pointers)
+
+The asset bases that used to be hardcoded labels are now **indirect pointers**,
+matching the project's existing palette-pointer style. A *channel* is one row of
+`channel_table` (`data/channels.s`) — 7 longs: logo bitmap, logo palette, font
+bitmap, music SNDH, font palettes c1/c2/c3. `ApplyChannel` (`switch.s`) copies
+the active row into the `chan_*` BSS pointers that the consumers now read:
+
+| Consumer | Was | Now reads |
+|----------|-----|-----------|
+| `screen.s` PaintLogoInto / palette | `top_logo_bitmap` / `top_logo_palette` | `chan_logo_bitmap` / `chan_logo_palette` |
+| `vbl.s` per-frame palette | `top_logo_palette` | `chan_logo_palette` |
+| `engine.s` glyph fetch | `font_bitmap` | `chan_font_base` |
+| `hbl.s` SetPalettePointers | `font_palette_c{1,2,3}` | `chan_font_pal_c{1,2,3}` |
+| `music.s` init/play/exit | `music_sndh_file` | `chan_music_ptr` |
+
+Channel B is currently a **scaffold duplicate** of A (same labels) — proving the
+plumbing before real B assets exist. Replace `chan1`'s entries in
+`data/channels.s` one at a time. (Scaffold constraint: B logo stays 320×74 and
+the font 48×34/64-glyph so dimension constants stay shared.)
+
+### Trigger + sequence
+
+- **Trigger:** byte `9` embedded in the scroll text (bytes 1–8 are effect
+  markers, 0 is the wrap terminator). The parser in `engine.s .fetch_next_char`
+  consumes it and sets `switch_pending`. `MainLoop` runs `DoChannelSwitch` after
+  the render step — **main-loop context, never an ISR**, so the multi-second
+  blocking static phase is safe.
+- **`DoChannelSwitch` (`switch.s`):** set `noise_active` (gates the VBL) →
+  `MusicSndhExit` → mask Timer-B + install grayscale palette → static phase →
+  toggle `active_channel` + `ApplyChannel` → repaint logo into both buffers →
+  `MusicSndhInit` (new music) → `ScrollerInit` → reinstall palette → unmask
+  Timer-B → clear flags.
+
+### Static (snow) — `noise.s`
+
+A genuine full-screen random write every frame won't fit 50 Hz / 8 MHz (the
+36 KB store alone is ~110k cy). Instead `noise_field` (one screen + 16 KB slack)
+is filled **once** at boot with a fast Galois LFSR (CRC-32 feedback), then each
+frame the STE screen base is pointed at a **random offset** into it. Because the
+field is random and the offset jumps randomly per frame, every frame shows an
+uncorrelated random slice → true 50 Hz scintillating snow for ~free.

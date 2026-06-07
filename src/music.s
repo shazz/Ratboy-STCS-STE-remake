@@ -26,7 +26,7 @@ MusicSndhInit:
                     tst.w       MusicIsInited
                     bne.s       .already
                     movem.l     d0-a6, -(sp)
-                    lea         music_sndh_file, a0
+                    move.l      chan_music_ptr, a0
                     moveq       #1, d0                  ; song number 1 (1-based)
                     jsr         (a0)                    ; offset 0 = init
                     move.w      #1, MusicIsInited
@@ -41,7 +41,7 @@ MusicSndhPlay:
                     tst.w       MusicIsInited
                     beq.s       .skip
                     movem.l     d0-a6, -(sp)
-                    lea         music_sndh_file, a0
+                    move.l      chan_music_ptr, a0
                     jsr         8(a0)                   ; offset 8 = play
                     move.w      #1, MusicIsPlaying
                     movem.l     (sp)+, d0-a6
@@ -60,7 +60,7 @@ MusicSndhExit:
                     ; into the half-torn-down player.
                     clr.w       MusicIsInited
                     movem.l     d0-a6, -(sp)
-                    lea         music_sndh_file, a0
+                    move.l      chan_music_ptr, a0
                     jsr         4(a0)                   ; offset 4 = exit
                     clr.w       MusicIsPlaying
                     movem.l     (sp)+, d0-a6

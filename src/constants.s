@@ -210,6 +210,21 @@ PALETTE_SWAP_ENTRY  equ     77                      ; line 77 = just before SCRO
 SCROLL_EFFECT_DEFAULT equ   7
 
 ; ----------------------------------------------------------------------------
+; Channel switch ("TV channel flip") — see switch.s / data/channels.s
+; ----------------------------------------------------------------------------
+; In-text marker byte 9 fires the channel switch (bytes 1..8 are effect
+; markers, 0 is the wrap terminator). The parser in .fetch_next_char sets
+; switch_pending; MainLoop runs DoChannelSwitch after the render step.
+SWITCH_MARKER       equ     9
+; Number of frames the analog-static flash holds (50 Hz → 150 = ~3 s).
+NOISE_FRAMES        equ     150
+; Extra bytes beyond one screen in the noise field. Each static frame points
+; the STE screen base at a random offset 0..NOISE_SLACK into the field, so the
+; visible window is a different random slice every frame (cheap 50 Hz snow).
+; MUST be a power of two (used as an AND mask). 16 KB → plenty of variation.
+NOISE_SLACK         equ     16384
+
+; ----------------------------------------------------------------------------
 ; Colors (ST-compatible palette values — $0rgb with 3 bits per channel,
 ; STE extra bit lives in bit 3 of each nibble. These values work on both.)
 ; ----------------------------------------------------------------------------

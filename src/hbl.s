@@ -218,7 +218,7 @@ SetPalettePointers:
                     and.w       #$0FFF, (a0)
 .no_old_c2:
 
-                    lea         font_palette_c1, a0
+                    move.l      chan_font_pal_c1, a0
                     move.l      a0, font_pal_ptr1       ; row 1 always c1
 
                     ; Default raster swap addresses (overridden per-effect below)
@@ -239,15 +239,15 @@ SetPalettePointers:
                     beq.s       .single_row             ; Type 5 (4× tall stretch) uses single palette
 
                     ; Multi-row (0, 6): c1, c2, c3
-                    lea         font_palette_c2, a0
+                    move.l      chan_font_pal_c2, a0
                     move.l      a0, font_pal_ptr2
-                    lea         font_palette_c3, a0
+                    move.l      chan_font_pal_c3, a0
                     move.l      a0, font_pal_ptr3
                     bra.s       .apply_markers
 
 .single_row:
                     ; Single-row: all c1
-                    lea         font_palette_c1, a0
+                    move.l      chan_font_pal_c1, a0
                     move.l      a0, font_pal_ptr2
                     move.l      a0, font_pal_ptr3
                     bra.s       .apply_markers
@@ -257,7 +257,7 @@ SetPalettePointers:
                     ; Move the c2 swap from line 118 to line 131 (just before
                     ; the mirror line at Y=132). ptr3 stays c2 so the c3
                     ; swap at line 159 doesn't switch back.
-                    lea         font_palette_c2, a0
+                    move.l      chan_font_pal_c2, a0
                     move.l      a0, font_pal_ptr2
                     move.l      a0, font_pal_ptr3
                     move.l      #RASTER_SWAP_C2_TYPE4, raster_swap_c2_addr
@@ -269,9 +269,9 @@ SetPalettePointers:
                     ; to give triangle 1 a bit of headroom.
                     ; C2 swap relocated to line 121 (between the apexes of
                     ; the two triangles); C3 swap stays at line 159.
-                    lea         font_palette_c2, a0
+                    move.l      chan_font_pal_c2, a0
                     move.l      a0, font_pal_ptr2
-                    lea         font_palette_c3, a0
+                    move.l      chan_font_pal_c3, a0
                     move.l      a0, font_pal_ptr3
                     move.l      #RASTER_SWAP_C1_TYPE7, raster_swap_c1_addr
                     move.l      #RASTER_SWAP_C2_TYPE7, raster_swap_c2_addr

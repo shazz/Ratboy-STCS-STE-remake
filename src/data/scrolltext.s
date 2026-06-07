@@ -36,6 +36,13 @@ scrolltext_S1_test:
 ; -----------------------------------------------------------------------------
                     ifne    1
 scrolltext_S1:
+                    ; --- TEST: quick channel switch right at the start ---
+                    ; "HELLO" scrolls in, then byte 9 flips the channel. Fast to
+                    ; test; move/delete this block for production timing.
+                    dc.b    1
+                    dc.b    "    HELLO                              "
+                    dc.b    SWITCH_MARKER
+
                     ; --- effect 0 — three fixed rows ---
                     dc.b    1
                     dc.b    "              PLEASE, READ ALL THIS SCROLL !!!           "

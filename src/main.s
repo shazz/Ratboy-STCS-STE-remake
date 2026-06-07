@@ -43,6 +43,7 @@
 Main:
                     bsr         SuperEnter              ; cross into kernel mode
                     bsr         SaveState               ; snapshot TOS palette/res/base
+                    bsr         InitChannels            ; select channel 0; load chan_* ptrs (before InitScreen)
                     bsr         InitScreen              ; low-res, own buffer, logo painted
                     ifne        SCROLLER_ENABLED
                     bsr         ScrollerInit            ; zero scroll row, reset cursor
@@ -97,6 +98,10 @@ MainLoop:
                     bsr         ScrollerStepVblank      ; render + shift + plot to back buffer
                     bsr         SwapBuffers             ; NOW swap (makes our work visible next frame)
                     endif
+                    tst.w       switch_pending          ; byte-9 marker fired during render?
+                    beq.s       .no_switch
+                    bsr         DoChannelSwitch         ; static flash → flip channel A<->B
+.no_switch:
                     bsr         CheckEsc                ; non-blocking keyboard poll
                     tst.w       exit_flag
                     beq.s       .tick
@@ -135,7 +140,10 @@ CheckEsc:
                     include     "scroller/engine.s"
                     include     "vbl.s"
                     include     "hbl.s"
+                    include     "switch.s"
+                    include     "noise.s"
                     include     "data/background.s"
+                    include     "data/channels.s"
                     include     "data/font.s"
                     include     "data/scrolltext.s"
                     include     "data/music.s"

@@ -12,3 +12,9 @@
 music_sndh_file:
                     incbin      'assets/thrust.snd'
                     even
+
+; Channel B music — a different rip of the tune (SNDH "505"). Same 3-BRA.w
+; entry interface, so the music.s wrapper drives it unchanged.
+music_sndh_file_b:
+                    incbin      'assets/thrust-505.sndh'
+                    even

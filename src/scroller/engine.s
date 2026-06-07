@@ -238,6 +238,8 @@ ScrollRenderNextPword:
                     lea         scrolltext_S1, a0
                     move.b      (a0)+, d1
 .check_marker:
+                    cmp.b       #SWITCH_MARKER, d1  ; byte 9 → channel switch (consumed, no glyph)
+                    beq.s       .do_switch_marker
                     cmp.b       #1, d1
                     blt.s       .got_char           ; (defensive; d1=0 already wrapped)
                     cmp.b       #8, d1
@@ -251,6 +253,9 @@ ScrollRenderNextPword:
                     bsr         SetPalettePointers
                     move.l      (sp)+, a0
                     bra.s       .fetch_loop
+.do_switch_marker:
+                    move.w      #1, switch_pending  ; MainLoop runs DoChannelSwitch after render
+                    bra.s       .fetch_loop         ; consume marker, fetch next real char
 .got_char:
                     move.l      a0, scroll_text_cursor
                     sub.w       #FONT_FIRST_ASCII, d1
@@ -265,7 +270,7 @@ ScrollRenderNextPword:
                     add.w       d1, d1                  ; *4 (long index)
                     lea         glyph_offset_lut, a0
                     move.l      0(a0,d1.w), d1          ; d1 = idx * FONT_GLYPH_BYTES
-                    lea         font_bitmap, a0
+                    move.l      chan_font_base, a0      ; active channel's font (was: lea font_bitmap)
                     adda.l      d1, a0
                     rts
 

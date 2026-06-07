@@ -62,11 +62,18 @@ VBLHandler:
                     movem.l     d0-a6, -(sp)
                     addq.w      #1, vbl_counter
 
+                    ; During the channel-switch static flash, DoChannelSwitch
+                    ; owns the palette and screen base — skip our normal work
+                    ; (but the counter bump above must run so WAIT_VBL ticks).
+                    tst.w       noise_active
+                    bne.s       .vbl_exit
+
                     ; Buffer swap moved to MainLoop (SwapBuffers) — we just
                     ; reinstall palette and reset raster_ptr here.
 
                     ; Reinstall LOGO palette for the new frame's logo area.
-                    movem.l     top_logo_palette, d0-d7
+                    move.l      chan_logo_palette, a0   ; active channel's logo palette
+                    movem.l     (a0), d0-d7
                     movem.l     d0-d7, SHIFTER_PALETTE
                     ifne        MUSIC_ENABLED
                     PROFILE_COLOR $F0F                  ; Magenta = MusicSndhPlay
@@ -78,6 +85,7 @@ VBLHandler:
                     ; ptr BEFORE the first visible scanline of next frame.
                     bsr         ArmTimerBRaster
 
+.vbl_exit:
                     movem.l     (sp)+, d0-a6
                     rts
 

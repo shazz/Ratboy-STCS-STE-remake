@@ -57,12 +57,13 @@ InitScreen:
 
                     ; ---------- 6. zero both buffers ----------
                     move.l      screen_buffer_a, a0
-                    bsr         .clear_one
+                    bsr         ClearScreenBuffer
                     move.l      screen_buffer_b, a0
-                    bsr         .clear_one
+                    bsr         ClearScreenBuffer
 
                     ; ---------- 7. install logo palette ----------
-                    movem.l     top_logo_palette, d0-d7
+                    move.l      chan_logo_palette, a0   ; active channel's logo palette
+                    movem.l     (a0), d0-d7
                     movem.l     d0-d7, SHIFTER_PALETTE
 
                     ; ---------- 8. blit logo into BOTH buffers ----------
@@ -71,15 +72,15 @@ InitScreen:
                     ; The scroller writes only into the row regions
                     ; (SCROLL_Y_1..3), well below the logo.
                     move.l      screen_buffer_a, a1
-                    bsr         .paint_logo
+                    bsr         PaintLogoInto
                     move.l      screen_buffer_b, a1
-                    bsr         .paint_logo
+                    bsr         PaintLogoInto
 
                     rts
 
-; ---------- helpers ----------
-.clear_one:
-                    ; a0 = buffer to clear (SCREEN_BYTES bytes)
+; ---------- helpers (global — reused by switch.s RepaintChannel) ----------
+; ClearScreenBuffer — a0 = buffer base; clears SCREEN_BYTES. Clobbers d1,d2,a0.
+ClearScreenBuffer:
                     move.w      #(SCREEN_BYTES/4)-1, d1
                     moveq       #0, d2
 .clear_loop:
@@ -87,9 +88,10 @@ InitScreen:
                     dbra        d1, .clear_loop
                     rts
 
-.paint_logo:
-                    ; a1 = destination buffer base
-                    lea         top_logo_bitmap, a0
+; PaintLogoInto — a1 = destination buffer base; blits the active channel's
+; logo (chan_logo_bitmap) line-by-line. Clobbers d0,d1,a0,a1.
+PaintLogoInto:
+                    move.l      chan_logo_bitmap, a0    ; active channel's logo (was: lea top_logo_bitmap)
                     move.w      #TOP_LOGO_HEIGHT-1, d0          ; 74 lines
 .blit_line:
                     move.w      #(TOP_LOGO_LINE_B/4)-1, d1      ; 40 longs/line

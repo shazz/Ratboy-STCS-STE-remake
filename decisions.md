@@ -126,3 +126,40 @@ with song number 1 in `d0`.
 unless `thrust.snd` demands it at test time).
 **Consequences:** If `thrust.snd` needs Timer-driven replay, we'll hear it on first test
 and switch. The MusicSndhPlay wrapper is trivial to re-hook.
+
+## 2026-06-07 — Channel switch via indirect "channel descriptor" + byte-9 trigger
+
+**Status:** accepted
+**Context:** A new (non-1988) effect: a "TV channel flip" that swaps the entire
+asset set (logo, font, palettes, music) behind a few seconds of analog static.
+The engine hardcoded its asset labels everywhere, so swapping them needed an
+indirection layer. Three sub-decisions:
+**Decision:**
+1. **Indirect channel descriptor.** Asset bases become `chan_*` BSS pointers
+   loaded by `ApplyChannel` from a `channel_table` row, replacing hardcoded
+   labels in screen/vbl/hbl/engine/music. Mirrors the existing palette-pointer
+   pattern. Channel B starts as a scaffold duplicate of A; real assets swap in
+   one at a time.
+2. **Byte-9 in-text trigger, toggle topology.** Reuses the existing in-text
+   marker scheme (bytes 1–8 = effects). Byte 9 sets a flag; the blocking switch
+   runs in `MainLoop`, not an ISR. One state bit toggles A↔B.
+3. **Static = panned random field, not per-frame random write.** A real
+   full-screen fresh-random write can't fit 50 Hz/8 MHz (≥110k cy for the store
+   alone, before any PRNG). Instead fill a screen+slack `noise_field` once with a
+   Galois LFSR, then per frame point the STE byte-aligned screen base at a random
+   offset → uncorrelated random slice every frame → true 50 Hz snow for ~free.
+**Alternatives considered:**
+- Per-frame full-screen PRNG fill (the "obvious" approach) — physically can't
+  hit 50 Hz on the 68000; would update at ~18 Hz and still cost the whole frame.
+- A second `channel_table` of scrolltext per channel (deferred — shared text is
+  fine for now; the byte-9 marker simply ping-pongs A↔B each scroll cycle).
+- Keypress / counter trigger (rejected — in-text marker fits the existing
+  sequencer and keeps the "sequence IS the data" philosophy).
+**Consequences:**
+- Switch logic is isolated in `switch.s` (orchestration) + `noise.s` (snow);
+  consumers each changed one label → one pointer read.
+- The static phase is ~3 s unresponsive to ESC (blocking) — acceptable.
+- On unmask, Timer-B may emit ≤1 frame of stale gradient before the next VBL
+  re-arms `raster_ptr` — invisible in practice.
+- Holding two full asset sets in RAM is cheap (logo 11840 B, thrust.snd 4830 B)
+  vs the ~110 KB working set on a 1 MB STE.
