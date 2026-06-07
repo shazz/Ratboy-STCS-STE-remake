@@ -455,31 +455,17 @@ ScrollPlotDispatch:
 ; Copies buffer[0..19] to all 3 screen rows at fixed Y positions.
 ; ----------------------------------------------------------------------------
 ScrollPlotType0:
-                    move.l      scroll_plot_addr, a0
+                    ; Blitter copy the scroll row to all 3 fixed Y positions.
+                    ; Cooperative copy-blit (~2 cy/word) replaces the unrolled
+                    ; CPU movem (~9.5 cy/word) — the dominant cost. a5 survives
+                    ; the calls (ScrollBlitCopyRow clobbers only d1/a0).
                     move.l      back_buffer_ptr, a5
-                    lea         (SCROLL_Y_1*SCREEN_LINE_BYTES)(a5), a2
-                    lea         (SCROLL_Y_2*SCREEN_LINE_BYTES)(a5), a3
-                    lea         (SCROLL_Y_3*SCREEN_LINE_BYTES)(a5), a4
-
-                    ; Fully unrolled (REPT) with baked (d16,An) displacements:
-                    ; removes the per-line dbra and the 18 lea/line (15 inner
-                    ; chunk-advances + 3 outer strides). Max disp 33*184+4*32 =
-                    ; 6200, well inside the ±32K d16 range. Source is still read
-                    ; sequentially via (a0)+; the 8-byte buffer-line gap is
-                    ; skipped per line.
-T0_LINE             set         0
-                    rept        SCROLL_HEIGHT
-T0_CHUNK            set         0
-                    rept        5
-                    movem.l     (a0)+, d0-d6/a6
-                    movem.l     d0-d6/a6, (T0_LINE*SCREEN_LINE_BYTES+T0_CHUNK*32,a2)
-                    movem.l     d0-d6/a6, (T0_LINE*SCREEN_LINE_BYTES+T0_CHUNK*32,a3)
-                    movem.l     d0-d6/a6, (T0_LINE*SCREEN_LINE_BYTES+T0_CHUNK*32,a4)
-T0_CHUNK            set         T0_CHUNK+1
-                    endr
-                    addq.l      #8, a0                  ; skip 8-byte buffer-line gap
-T0_LINE             set         T0_LINE+1
-                    endr
+                    lea         (SCROLL_Y_1*SCREEN_LINE_BYTES)(a5), a0
+                    bsr         ScrollBlitCopyRow
+                    lea         (SCROLL_Y_2*SCREEN_LINE_BYTES)(a5), a0
+                    bsr         ScrollBlitCopyRow
+                    lea         (SCROLL_Y_3*SCREEN_LINE_BYTES)(a5), a0
+                    bsr         ScrollBlitCopyRow
                     rts
 
 ; ----------------------------------------------------------------------------
@@ -1154,6 +1140,42 @@ ClearScrollerRange:
                     bset.b      #7, BLIT_CTRL(a0)       ; re-trigger; Z reflects pre-set busy state
                     nop                                 ; let the blitter grab the bus
                     bne.s       .restart                ; still busy → keep restarting
+                    rts
+
+; ----------------------------------------------------------------------------
+; ScrollBlitCopyRow — cooperative blitter COPY of one scroll row (the visible
+; 20 pwords × SCROLL_HEIGHT lines) from scroll_plot_addr → a0 (dest top byte).
+; Same cooperative idiom + caveats as ClearScrollerRange above (must NOT be HOG
+; during the visible region — Timer-B gradient). The only differences from the
+; clear: OP=3 (source = straight copy) and a real source address + stride.
+;   in:  a0 = dest top byte (a screen line start); source = scroll_plot_addr.
+;   clobbers d1/a0.
+; SRC stride 168 (read 160, skip 8); DST stride 184 (write 160, skip 24):
+;   (XCOUNT-1)*XINC + YINC = 79*2 + 10 = 168;  79*2 + 26 = 184.
+; ----------------------------------------------------------------------------
+SCROLL_COPY_WORDS   equ     SCREEN_VIS_PWORDS*4         ; 80 words = 160 bytes/line
+ScrollBlitCopyRow:
+                    move.l      a0, d1                  ; preserve dest top
+                    lea         BLITTER, a0
+                    move.w      #2, BLIT_SRC_XINC(a0)
+                    move.w      #SCROLL_BUFFER_LINE_BYTES-(SCROLL_COPY_WORDS-1)*2, BLIT_SRC_YINC(a0)
+                    move.l      scroll_plot_addr, BLIT_SRC_ADDR(a0)
+                    move.w      #$FFFF, BLIT_EMASK1(a0)
+                    move.w      #$FFFF, BLIT_EMASK2(a0)
+                    move.w      #$FFFF, BLIT_EMASK3(a0)
+                    move.w      #2, BLIT_DST_XINC(a0)
+                    move.w      #SCREEN_LINE_BYTES-(SCROLL_COPY_WORDS-1)*2, BLIT_DST_YINC(a0)
+                    move.l      d1, BLIT_DST_ADDR(a0)
+                    move.w      #SCROLL_COPY_WORDS, BLIT_XCOUNT(a0)
+                    move.w      #SCROLL_HEIGHT, BLIT_YCOUNT(a0)
+                    move.b      #2, BLIT_HOP(a0)        ; HOP=source
+                    move.b      #3, BLIT_OP(a0)         ; OP=3 = source → straight copy
+                    move.b      #0, BLIT_SKEW(a0)       ; word-aligned
+                    move.b      #$80, BLIT_CTRL(a0)     ; start, cooperative
+.restart:
+                    bset.b      #7, BLIT_CTRL(a0)
+                    nop
+                    bne.s       .restart
                     rts
 
 ; ----------------------------------------------------------------------------
