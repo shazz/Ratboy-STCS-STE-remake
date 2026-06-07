@@ -41,3 +41,7 @@ In `docs/`:
 - `blitter_faq.txt` — STE Blitter FAQ.
 - `blitter_execution_times.md` — STE Blitter execution times.
 - `68000_execution_cycles.md` — 68000 CPU execution times.
+
+## Tools
+
+- tools/cycles/README.md: a python tool to count used cycles

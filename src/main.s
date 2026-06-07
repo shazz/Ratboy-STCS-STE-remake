@@ -108,11 +108,13 @@ MainLoop:
                     rts
 
 ; ----------------------------------------------------------------------------
-; CheckEsc — non-blocking keyboard poll via GEMDOS.
-;   Cconis ($0B): returns d0 = -1 if a char is waiting, 0 otherwise
-;   Cconin ($01): reads a char (blocking — safe here because Cconis just said yes)
-; On ESC, sets exit_flag. On any other key, consumes it silently.
-; Clobbers: d0.
+; CheckEsc — non-blocking keyboard poll via GEMDOS. Runs in MainLoop's idle
+; time (AFTER the per-VBL work), so it never competes with the 1-VBL budget.
+;   Cconis ($0B): d0 = -1 if a char is waiting, 0 otherwise
+;   Crawcin ($07): reads a char, no echo
+; ESC → exit_flag. 'M' key → switch_pending (manual channel flip — the SAME flag
+; the byte-9 in-text marker sets). Any other key consumed silently.
+; Clobbers d0, d1.
 ; ----------------------------------------------------------------------------
 CheckEsc:
                     move.w      #GEMDOS_CCONIS, -(sp)
@@ -126,7 +128,25 @@ CheckEsc:
                     addq.l      #2, sp
 
                     cmp.b       #KEY_ESC, d0
+                    beq.s       .do_exit
+                    ; Channel switch on 'M'. GEMDOS packs ASCII in bits 0-7 and
+                    ; the IKBD SCANCODE in bits 16-23. Match BOTH: the ASCII
+                    ; 'M'/'m' (when the keymap delivers it) AND the physical
+                    ; M-key scancode $32 — robust against French-TOS / Hatari
+                    ; AZERTY-vs-QWERTY remaps (ESC works, but letter keys can
+                    ; land on a different ASCII).
+                    cmp.b       #'M', d0
+                    beq.s       .do_switch
+                    cmp.b       #'m', d0
+                    beq.s       .do_switch
+                    move.l      d0, d1
+                    swap        d1                      ; d1 low byte = scancode
+                    cmp.b       #$32, d1                ; physical 'M' key
                     bne.s       .no_key
+.do_switch:
+                    move.w      #1, switch_pending      ; same flag the byte-9 marker sets
+                    bra.s       .no_key
+.do_exit:
                     move.w      #1, exit_flag
 .no_key:
                     rts

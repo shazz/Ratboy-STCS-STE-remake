@@ -36,13 +36,6 @@ scrolltext_S1_test:
 ; -----------------------------------------------------------------------------
                     ifne    1
 scrolltext_S1:
-                    ; --- TEST: quick channel switch right at the start ---
-                    ; "HELLO" scrolls in, then byte 9 flips the channel. Fast to
-                    ; test; move/delete this block for production timing.
-                    dc.b    1
-                    dc.b    "    HELLO                              "
-                    dc.b    SWITCH_MARKER
-
                     ; --- effect 0 — three fixed rows ---
                     dc.b    1
                     dc.b    "              PLEASE, READ ALL THIS SCROLL !!!           "
@@ -51,6 +44,10 @@ scrolltext_S1:
                     ; --- effect 1 — single row 2x tall + sine ---
                     dc.b    2
                     dc.b    "-- STARGOOSE --            "
+
+                    ; --- CHANNEL SWITCH is now triggered by the 'M' key (see
+                    ; CheckEsc in main.s). The in-text byte-9 marker still works —
+                    ; drop a `dc.b SWITCH_MARKER` anywhere for a scripted flip. ---
 
                     ; --- effect 2 — water reflection ---
                     dc.b    3
