@@ -513,17 +513,27 @@ ScrollPlotType1:
                     add.w       d0, d0                  ; word index
                     lea         type1_traj_lut, a3
                     move.w      0(a3,d0.w), d1          ; LUT value (0..20)
-                    move.w      sine_direction, d0
-                    muls.w      d1, d0
+                    ; sine_offset = direction(±1) * magnitude — conditional negate
+                    ; instead of muls.w (MULS = 70 cy).
+                    move.w      d1, d0                  ; magnitude
+                    tst.w       sine_direction
+                    bpl.s       .so_pos
+                    neg.w       d0
+.so_pos:
                     move.w      d0, sine_offset
 
                     ; --- Targeted clear: 84 lines around the bob footprint ---
                     move.w      #TYPE1_ROW_Y, d0
                     add.w       sine_offset, d0
                     sub.w       #TYPE1_CLEAR_TOP_MARGIN, d0
-                    mulu.w      #SCREEN_LINE_BYTES, d0
+                    ; d0 (Y) → Y*184 via y_offset_lut (was mulu.w #184)
+                    moveq       #0, d1                  ; clean high word
+                    move.w      d0, d1
+                    add.w       d1, d1                  ; Y*2 word index
+                    lea         y_offset_lut, a0
+                    move.w      0(a0,d1.w), d1          ; d1 = Y*184 (high word stays 0)
                     move.l      back_buffer_ptr, a0
-                    adda.l      d0, a0
+                    adda.l      d1, a0
                     move.w      #TYPE1_CLEAR_LINES-1, d7
                     bsr         ClearScrollerRange
                     PROFILE_COLOR $00F                  ; Blue = Plot back from Clear
@@ -711,8 +721,12 @@ ScrollPlotType3:
                     add.w       d0, d0
                     lea         type1_traj_lut, a3
                     move.w      0(a3,d0.w), d1
-                    move.w      sine_direction, d0
-                    muls.w      d1, d0
+                    ; sine_offset = direction(±1) * magnitude — conditional negate
+                    move.w      d1, d0                  ; magnitude
+                    tst.w       sine_direction
+                    bpl.s       .so_pos
+                    neg.w       d0
+.so_pos:
                     move.w      d0, sine_offset
 
                     move.l      back_buffer_ptr, a5
@@ -721,6 +735,8 @@ ScrollPlotType3:
                     move.w      #TYPE3_ROW_Y, d3
                     add.w       sine_offset, d3         ; d3 = base Y this frame
 
+                    lea         y_offset_lut, a4        ; hoisted: per-strip Y*184 lookup
+                    moveq       #0, d7                  ; clean-high holder for the lookup
                     moveq       #19, d6                 ; strip counter
 
 .strip:
@@ -734,14 +750,15 @@ ScrollPlotType3:
                     move.w      0(a3,d2.w), d5          ; d5 = per-strip Y offset
 
                     move.w      d3, d2
-                    add.w       d5, d2
-                    mulu.w      #SCREEN_LINE_BYTES, d2
+                    add.w       d5, d2                  ; d2 = Y
+                    add.w       d2, d2                  ; Y*2 word index
+                    move.w      0(a4,d2.w), d7          ; d7 = Y*184 (was mulu.w #184)
 
                     lsl.w       #3, d0                  ; * 8 bytes per pword
                     lea         0(a2,d0.w), a0          ; buffer column
 
                     move.l      a5, a1
-                    adda.l      d2, a1
+                    adda.l      d7, a1
                     adda.w      d0, a1                  ; screen column
 
                     ; 1-line interleave: source +1 line per iter, dest +2 lines
@@ -781,6 +798,8 @@ ScrollPlotType4:
                     move.l      back_buffer_ptr, a5
                     move.l      scroll_plot_addr, a2
 
+                    lea         y_offset_lut, a4        ; hoisted: per-strip Y*184 lookup
+                    moveq       #0, d7                  ; clean-high holder for the lookup
                     moveq       #19, d6                 ; strip counter
 
 .strip:
@@ -793,19 +812,21 @@ ScrollPlotType4:
 
                     ; Row 1: Y_top = TYPE4_ROW1_TOP_Y + s
                     move.w      #TYPE4_ROW1_TOP_Y, d2
-                    add.w       d3, d2
-                    mulu.w      #SCREEN_LINE_BYTES, d2
+                    add.w       d3, d2                  ; Y1
+                    add.w       d2, d2                  ; Y1*2 word index
+                    move.w      0(a4,d2.w), d7          ; Y1*184 (was mulu.w #184)
                     move.l      a5, a1
-                    adda.l      d2, a1
+                    adda.l      d7, a1
                     adda.w      d0, a1
 
                     ; Row 2 start (source line 0): Y = 2·MIRROR − T1 − s
                     ; Each source line decrements dest Y → upside-down render.
                     move.w      #TYPE4_ROW2_START_Y, d2
-                    sub.w       d3, d2
-                    mulu.w      #SCREEN_LINE_BYTES, d2
+                    sub.w       d3, d2                  ; Y2
+                    add.w       d2, d2                  ; Y2*2 word index
+                    move.w      0(a4,d2.w), d7          ; Y2*184 (was mulu.w #184)
                     move.l      a5, a3
-                    adda.l      d2, a3
+                    adda.l      d7, a3
                     adda.w      d0, a3
 
                     ; Plot 34 source lines: row 1 forward, row 2 backward.
