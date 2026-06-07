@@ -82,7 +82,7 @@ SetupTimerB:
                     bset.b      #0, MFP_IERA                            ; enable Timer B
                     bset.b      #0, MFP_IMRA                            ; unmask Timer B
                     move.b      #TIMER_B_INITIAL_COUNT, MFP_TBDR
-                    move.l      raster_table_active, raster_ptr
+                    move.l      raster_table_active, GradRead+2         ; seed self-modified read ptr
                     move.b      #8, MFP_TBCR                            ; start, event-count mode
                     rts
 
@@ -99,13 +99,14 @@ RemoveHBL:
                     rts
 
 ; ----------------------------------------------------------------------------
-; ArmTimerBRaster — called from VBL each frame. Just resets raster_ptr;
-; Timer B is left running continuously by InstallHBL. Resetting only the
-; pointer (not the timer itself) eliminates the per-frame restart-jitter
-; that used to shift the gradient up/down by 1 scanline between frames.
+; ArmTimerBRaster — called from VBL each frame. Resets the read pointer (now
+; GradRead's self-modified abs.l operand); Timer B is left running continuously
+; by InstallHBL. Resetting only the pointer (not the timer itself) eliminates
+; the per-frame restart-jitter that used to shift the gradient by 1 scanline.
+; Safe to patch here: Timer B never fires during vblank.
 ; ----------------------------------------------------------------------------
 ArmTimerBRaster:
-                    move.l      raster_table_active, raster_ptr
+                    move.l      raster_table_active, GradRead+2
                     rts
 
 ; ----------------------------------------------------------------------------
@@ -162,37 +163,35 @@ MARK_C3     equ     $A000
 ; NOTE: internal labels are GLOBAL (tb_*) on purpose — the GradWrite label below
 ; must be global so SetGradTarget* can self-modify its operand, and mixing a
 ; global label among local (.foo) labels would break local-label scoping.
+; The read pointer is SELF-MODIFIED into GradRead's abs.l operand instead of
+; held in a0 (no a0 save/restore, no raster_ptr memory round-trip). Advanced by
+; RASTER_FIRE_STRIDE each fire; reset to raster_table_active by ArmTimerBRaster
+; in the VBL (Timer-B never fires during vblank, so the patch is race-free).
 TimerBHandler:
-                    move.l      a0, -(sp)
                     move.l      d0, -(sp)
-                    move.l      raster_ptr, a0
-                    move.w      (a0)+, d0               ; +2, sets flags from d0
-                    bmi.s       tb_swap                 ; bit 15 = swap action
-                    btst        #14, d0
-                    bne.s       tb_skip                 ; bit 14 = skip (no write)
-
+GradRead:
+                    move.w      raster_table.l, d0      ; abs.l src self-advanced per fire
+                    cmp.w       #$1000, d0              ; gradient is 12-bit ($0xxx);
+                    bhs.s       tb_marker               ; markers are >= $4000 → cold path
                     ; Common path: write gradient to the patched target register.
                     ; GradWrite's abs.l dest operand is self-modified per channel:
                     ; $FF8240 (colour 0 — channel A backdrop) or $FF8242 (colour 1
                     ; — channel B's font register, so colour 0 stays solid black).
 GradWrite:
                     move.w      d0, SHIFTER_PALETTE
-                    addq.l      #RASTER_FIRE_STRIDE-2, a0  ; +(stride-2) to total stride
-                    move.l      a0, raster_ptr
+                    addq.l      #RASTER_FIRE_STRIDE, GradRead+2  ; advance read ptr (carry-safe)
 tb_exit:
                     bclr.b      #0, MFP_ISRA
                     move.l      (sp)+, d0
-                    move.l      (sp)+, a0
                     rte
 
-tb_skip:
-                    addq.l      #RASTER_FIRE_STRIDE-2, a0
-                    move.l      a0, raster_ptr
-                    bra.s       tb_exit
-
+                    ; Cold path: marker entry (>= $4000). Advance, then decode.
+tb_marker:
+                    addq.l      #RASTER_FIRE_STRIDE, GradRead+2
+                    tst.w       d0                      ; re-set flags (addq clobbered them)
+                    bpl.s       tb_exit                 ; $4xxx = skip (bit 15 clear) → no write
+                    ; bit 15 set ($8/9/Axxx) = c1/c2/c3 swap (channel A only)
 tb_swap:
-                    addq.l      #RASTER_FIRE_STRIDE-2, a0
-                    move.l      a0, raster_ptr
                     move.w      d0, SHIFTER_PALETTE     ; channel-A swaps write colour 0
                     cmp.w       #$8FFF, d0
                     bls.s       tb_swap_c1              ; $8000..$8FFF
@@ -381,7 +380,6 @@ old_timer_b:        ds.l        1
 old_tbcr:           ds.b        1
 old_tbdr:           ds.b        1
                     even
-raster_ptr:         ds.l        1
 font_pal_ptr1:      ds.l        1               ; palette pointer for row 1
 font_pal_ptr2:      ds.l        1               ; palette pointer for row 2
 font_pal_ptr3:      ds.l        1               ; palette pointer for row 3
