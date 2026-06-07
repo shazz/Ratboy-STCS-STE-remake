@@ -702,12 +702,10 @@ ScrollPlotType2:
 TYPE3_ROW_Y         equ     100                     ; centered for 68-line interleaved height
 
 ScrollPlotType3:
-                    bsr         ClearScrollerRegion
-                    PROFILE_COLOR $00F                  ; Blue = Plot back from Clear
-
-                    ; Trajectory sine via LUT, driven by REAL VBL count — same
-                    ; mechanism as Type 1: 50 frames per half-cycle = 1 second
-                    ; top-to-bottom at 50 Hz, robust to MainLoop VBL slippage.
+                    ; Trajectory sine FIRST — it now drives BOTH the targeted
+                    ; clear bounds and the plot Y (same mechanism as Type 1). 50
+                    ; frames per half-cycle = 1 s top-to-bottom at 50 Hz, robust
+                    ; to MainLoop VBL slippage.
                     move.w      vbl_counter, d0
                     move.w      type1_prev_vbl, d1
                     move.w      d0, type1_prev_vbl
@@ -731,6 +729,26 @@ ScrollPlotType3:
                     neg.w       d0
 .so_pos:
                     move.w      d0, sine_offset
+
+                    ; Targeted clear: ~84 lines around the current bob footprint
+                    ; instead of the full 130-line ClearScrollerRegion. Type 3's
+                    ; footprint (base+bob, 74-line interleaved span) matches
+                    ; Type 1's, so reuse its margin/line constants. Saves ~46
+                    ; lines of clear/frame. (sine_offset is in memory, so it
+                    ; survives ClearScrollerRange clobbering d0-d6/a1-a6.)
+                    move.w      #TYPE3_ROW_Y, d0
+                    add.w       sine_offset, d0
+                    sub.w       #TYPE1_CLEAR_TOP_MARGIN, d0
+                    moveq       #0, d1                  ; clean high word
+                    move.w      d0, d1
+                    add.w       d1, d1                  ; Y*2 word index
+                    lea         y_offset_lut, a0
+                    move.w      0(a0,d1.w), d1          ; d1 = Y*184
+                    move.l      back_buffer_ptr, a0
+                    adda.l      d1, a0                  ; a0 = clear top byte
+                    move.w      #TYPE1_CLEAR_LINES-1, d7
+                    bsr         ClearScrollerRange
+                    PROFILE_COLOR $00F                  ; Blue = Plot back from Clear
 
                     move.l      back_buffer_ptr, a5
                     move.l      scroll_plot_addr, a2
