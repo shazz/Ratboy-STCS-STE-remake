@@ -30,3 +30,23 @@ font_palette_c2:
                     even
 font_palette_c3:
                     incbin      'build/font_c3.pal' ; cyan gradient
+
+                    ; --- Channel B font (fuzion) — remapped to ASCII layout by
+                    ; tools/png2font_remap.py. Same 48×34 / 64-glyph geometry, so
+                    ; the engine reads it via chan_font_base unchanged. font_b.pal
+                    ; is its native grayscale palette (wire to chan_font_pal_* when
+                    ; channel B gets its own colors).
+                    even
+font_bitmap_b:
+                    incbin      'build/font_b.bin'
+
+                    ; Channel B font palette: the fuzion glyphs are ~2-tone
+                    ; (body on indices 4 & 15 + minor AA), so a solid bright
+                    ; ramp renders them as clean white letters — legible and
+                    ; visibly distinct from channel A's purple gradient. Index 0
+                    ; stays transparent (the per-scanline raster gradient).
+                    even
+font_palette_b:
+                    dc.w    $000
+                    dc.w    $777,$777,$777,$777,$777,$777,$777
+                    dc.w    $777,$777,$777,$777,$777,$777,$777

@@ -75,7 +75,11 @@ DoChannelSwitch:
                     ifne        MUSIC_ENABLED
                     bsr         MusicSndhInit           ; new channel's music
                     endif
-                    bsr         ScrollerInit            ; reset scroll + palette ptrs
+                    ; Re-apply the CURRENT effect's palette pointers so the new
+                    ; channel's font palettes load — but DON'T reset the scroller:
+                    ; the text continues where it left off, not from the top.
+                    move.w      scroll_effect_type, d0
+                    bsr         SetPalettePointers
                     bsr         InstallChannelLogoPalette
                     ifne        RASTER_ENABLED
                     bsr         UnmaskTimerB

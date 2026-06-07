@@ -104,6 +104,11 @@ CONVERTERS = [
     # 3-row palette variants (c2, c3) — we only need their .pal files, .bin is discarded
     (ASSETS / "font40x34_c2.png", BUILD / "font_c2", "png2font.py", (".pal", ".bin")),
     (ASSETS / "font40x34_c3.png", BUILD / "font_c3", "png2font.py", (".pal", ".bin")),
+    # Channel B font (fuzion): non-ASCII glyph order, 8×6 grid → remapped to ASCII layout
+    (ASSETS / "fuzion_fonts.png", BUILD / "font_b", "png2font_remap.py", (".pal", ".bin")),
+    # Channel B logo (MJJ graffiti): mjj_logo74.png is logo-mjj.png's graffiti block
+    # pre-cropped + scaled to 320×74 (the engine's logo geometry).
+    (ASSETS / "mjj_logo74.png", BUILD / "mjj_logo", "png2planar.py", (".pal", ".img")),
 ]
 
 

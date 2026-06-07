@@ -163,8 +163,9 @@ as effects 1..7 (no effect 0); we extended the range to byte 8 so all
 `switch_pending` and `MainLoop` runs `DoChannelSwitch` (`switch.s`) — music
 cuts, the screen fills with analog static (`noise.s`) for `NOISE_FRAMES`,
 then the active channel toggles A↔B (logo / font / palettes / music all swap
-via the `channel_table` descriptor in `src/data/channels.s`) and the scroll
-restarts. Place a `dc.b SWITCH_MARKER` (= 9) anywhere in the text to flip;
+via the `channel_table` descriptor in `src/data/channels.s`). The scroll text
+continues where the marker fired (it is NOT reset). Place a `dc.b SWITCH_MARKER`
+(= 9) anywhere in the text to flip;
 the marker is consumed, never rendered. See `ARCHITECTURE.md` "Channel switch"
 and ADR 2026-06-07. Tune the flash length with `NOISE_FRAMES` in `constants.s`.
 

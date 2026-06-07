@@ -21,19 +21,31 @@ flashes full-screen analog static for ~3 s, then toggles to a different
   frame → true 50 Hz snow for ~free. (A genuine per-frame full-screen
   random write can't fit 50 Hz/8 MHz — see ADR.)
 
-**Scaffold state:** channel B in `data/channels.s` is a **duplicate of A**
-(same labels). A switch currently looks like *static flash → identical
-screen + music restart* — that proves the plumbing. **Next:** replace
-`chan1` entries one at a time with `_b` assets (logo, font, palettes, 2nd
-`.snd`) and re-verify each.
+**Channel B — differentiated:**
+- **Music:** `thrust-505.sndh` (a different rip; same 3-BRA.w interface).
+- **Font:** `fuzion_fonts.png` — its glyph order (`A-Z!'()-.?:0-9,`, 8×6 grid)
+  is remapped to the engine's ASCII layout by the new
+  `tools/png2font_remap.py`. Rendered solid white via inline `font_palette_b`.
+- **Logo:** `mjj_logo74.png` (the MJJ graffiti block of `logo-mjj.png`, cropped
+  + scaled to 320×74), with its own derived palette.
 
-**New/changed files:** `src/switch.s`, `src/noise.s`, `src/data/channels.s`
-(new); indirection edits in `main.s`, `screen.s`, `vbl.s`, `hbl.s`,
-`music.s`, `scroller/engine.s`, `constants.s`. A **test** `dc.b SWITCH_MARKER`
-sits after the effect-1 segment in `scrolltext.s` — move or delete it.
+Both new converters are registered in `tools/build.py --assets`.
+
+**Switch preserves scroll position:** `DoChannelSwitch` re-applies the current
+effect's palette pointers but does NOT call `ScrollerInit` — the scroll text
+continues where the marker fired instead of restarting from the top.
+
+**New/changed files:** `src/switch.s`, `src/noise.s`, `src/data/channels.s`,
+`tools/png2font_remap.py` (new); indirection edits in `main.s`, `screen.s`,
+`vbl.s`, `hbl.s`, `music.s`, `scroller/engine.s`, `constants.s`, `data/font.s`,
+`data/background.s`, `data/music.s`. A **test** `dc.b SWITCH_MARKER` sits at the
+top of `scrolltext.s` ("HELLO" → switch) for fast iteration.
 
 **Knobs:** `NOISE_FRAMES` (flash length), `NOISE_SLACK` (snow variation) in
 `constants.s`.
+
+**Next idea:** channel B font filled with the raster gradient (encode the font
+inverted so the glyph body = index 0); single-plane `hooker.png` font suits this.
 
 ## Session 6 — Performance: 1 VBL goal
 

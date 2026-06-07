@@ -233,8 +233,10 @@ the font 48×34/64-glyph so dimension constants stay shared.)
 - **`DoChannelSwitch` (`switch.s`):** set `noise_active` (gates the VBL) →
   `MusicSndhExit` → mask Timer-B + install grayscale palette → static phase →
   toggle `active_channel` + `ApplyChannel` → repaint logo into both buffers →
-  `MusicSndhInit` (new music) → `ScrollerInit` → reinstall palette → unmask
-  Timer-B → clear flags.
+  `MusicSndhInit` (new music) → re-apply the **current** effect's palette
+  pointers (`SetPalettePointers`, so the new channel's font palette loads while
+  the scroll cursor/buffers are preserved — the text continues, it does NOT
+  restart) → reinstall logo palette → unmask Timer-B → clear flags.
 
 ### Static (snow) — `noise.s`
 

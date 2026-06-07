@@ -22,3 +22,13 @@ top_logo_palette:
                     even
 top_logo_bitmap:
                     incbin      'build/top_logo.img'
+
+                    ; --- Channel B logo (MJJ graffiti) — cropped from logo-mjj.png
+                    ; and scaled to the same 320×74 geometry by the build step.
+                    ; Has its own derived 16-color palette (top_logo_palette_b).
+                    even
+top_logo_palette_b:
+                    incbin      'build/mjj_logo.pal'
+                    even
+top_logo_bitmap_b:
+                    incbin      'build/mjj_logo.img'
