@@ -55,21 +55,17 @@ ScrollerInit:
                     move.w      #1, sine_direction      ; start moving down
                     clr.w       sine_offset
 
-                    bsr         ClearScrollBuffers      ; zero both render buffers; returns d1=0
-                    ; Clear scroll_next_pword (= 8 bytes × 34 lines = 272 bytes = 68 longs)
-                    lea         scroll_next_pword, a0
-                    move.w      #(8*SCROLL_HEIGHT/4)-1, d0
-.clr_n:
-                    move.l      d1, (a0)+
-                    dbra        d0, .clr_n
+                    bsr         ClearScrollBuffers      ; zero both buffers + the staging pword
                     rts
 
 ; ----------------------------------------------------------------------------
-; ClearScrollBuffers — zero both scroll render buffers (the rendered glyph
-; pixels). Does NOT touch the text cursor or effect state, so the scroll
+; ClearScrollBuffers — zero both scroll render buffers AND the staging pword
+; (scroll_next_pword, which ScrollShiftAndFill reads to fill the rightmost
+; column). Does NOT touch the text cursor or effect state, so the scroll
 ; continues where it left off. Used by ScrollerInit and by the channel switch
 ; (so the new font scrolls in over a blank row instead of mixing with the old
-; font's already-rendered pixels). Returns d1=0. Clobbers d0/d1/a0.
+; font's already-rendered pixels, incl. the staged slice). Returns d1=0.
+; Clobbers d0/d1/a0.
 ; ----------------------------------------------------------------------------
 ClearScrollBuffers:
                     moveq       #0, d1
@@ -83,6 +79,11 @@ ClearScrollBuffers:
 .csb_b:
                     move.l      d1, (a0)+
                     dbra        d0, .csb_b
+                    lea         scroll_next_pword, a0    ; staging slice (read by the shift-fill)
+                    move.w      #(8*SCROLL_HEIGHT/4)-1, d0
+.csb_n:
+                    move.l      d1, (a0)+
+                    dbra        d0, .csb_n
                     rts
 
 ; ----------------------------------------------------------------------------
@@ -509,7 +510,10 @@ TYPE1_ROW_Y         equ     100                     ; centered, leaves room for 
 ; full. (Type 3 shares these constants; its plot is tiny → fast → small delta →
 ; margin to spare.)
 TYPE1_CLEAR_TOP_MARGIN  equ     13                      ; 3 (footprint top) + 10 (jump margin)
-TYPE1_CLEAR_LINES       equ     94                      ; 74 footprint + 10 top + 10 bottom
+; LINES is capped so the clear never runs past Y=199: at max bob (+20),
+; clear_bottom = TYPE1_ROW_Y(100)+20-TOP_MARGIN(13)+LINES-1 must be ≤ 199 → ≤ 93.
+; (94 overflowed the 200-line screen buffer by 1 line → crash at peak bob.)
+TYPE1_CLEAR_LINES       equ     93                      ; 74 footprint + 10 top + 9 bottom
 
 ScrollPlotType1:
                     ; --- Trajectory sine first (drives both clear bounds and plot Y) ---

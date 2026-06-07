@@ -75,6 +75,11 @@ DoChannelSwitch:
                     bsr         ClearScrollBuffers      ; drop old-font glyph pixels so the new
                                                         ; font scrolls in over a blank row (no
                                                         ; A/B font mix); cursor untouched
+                    clr.w       scroll_render_phase     ; restart the glyph blend cycle so the
+                                                        ; first new char is a clean direct copy,
+                                                        ; not blended with the old font's overhang
+                                                        ; (scroll_curr_glyph still points at the
+                                                        ; old font until phase 0 re-fetches it)
                     ifne        MUSIC_ENABLED
                     bsr         MusicSndhInit           ; new channel's music
                     endif
