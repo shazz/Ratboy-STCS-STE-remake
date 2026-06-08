@@ -216,8 +216,8 @@ SCROLL_EFFECT_DEFAULT equ   7
 ; markers, 0 is the wrap terminator). The parser in .fetch_next_char sets
 ; switch_pending; MainLoop runs DoChannelSwitch after the render step.
 SWITCH_MARKER       equ     9
-; Number of frames the analog-static flash holds (50 Hz → 100 = ~2 s).
-NOISE_FRAMES        equ     100
+; Number of frames the analog-static flash holds (50 Hz → 30 = ~0.6 s).
+NOISE_FRAMES        equ     30
 ; Extra bytes beyond one screen in the noise field. Each static frame points
 ; the STE screen base at a random offset 0..NOISE_SLACK into the field, so the
 ; visible window is a different random slice every frame (cheap 50 Hz snow).
