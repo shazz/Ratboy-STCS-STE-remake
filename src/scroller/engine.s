@@ -546,6 +546,10 @@ ScrollPlotType1:
                     move.w      #TYPE1_ROW_Y, d0
                     add.w       sine_offset, d0
                     sub.w       #TYPE1_CLEAR_TOP_MARGIN, d0
+                    cmp.w       #TOP_LOGO_HEIGHT, d0    ; never clear up into the logo (Y 0..73)
+                    bge.s       .clr_top_ok
+                    move.w      #TOP_LOGO_HEIGHT, d0
+.clr_top_ok:
                     ; d0 (Y) → Y*184 via y_offset_lut (was mulu.w #184)
                     moveq       #0, d1                  ; clean high word
                     move.w      d0, d1
@@ -754,6 +758,10 @@ ScrollPlotType3:
                     move.w      #TYPE3_ROW_Y, d0
                     add.w       sine_offset, d0
                     sub.w       #TYPE1_CLEAR_TOP_MARGIN, d0
+                    cmp.w       #TOP_LOGO_HEIGHT, d0    ; never clear up into the logo (Y 0..73)
+                    bge.s       .clr_top_ok
+                    move.w      #TOP_LOGO_HEIGHT, d0
+.clr_top_ok:
                     moveq       #0, d1                  ; clean high word
                     move.w      d0, d1
                     add.w       d1, d1                  ; Y*2 word index
