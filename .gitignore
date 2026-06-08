@@ -11,4 +11,4 @@ uv.lock
 .DS_Store
 Thumbs.db
 .claude/settings.local.json
-screenshots/
+code-index.db
