@@ -8,17 +8,23 @@ Target: **Atari STE, 50 Hz PAL, low-res 320×200×16**. Tools: VASM + Hatari.
 ## Build & run
 
 ```bash
-uv run tools/build.py --run       # assemble + launch in Hatari
-uv run tools/build.py             # assemble only
-uv run tools/build.py --assets    # regenerate build/*.bin from assets/
-uv run tools/build.py --clean     # wipe build/
+./run.sh                          # assemble + launch in Hatari (STE, auto-runs the PRG)
+./build.sh                        # assemble only → build/AUTO/STRGOOSE.PRG
+uv run tools/build.py --assets    # regenerate build assets (PNG → planar, SNDH) from assets/
 ```
+
+`./build.sh` only re-assembles the source; run the `--assets` step after changing
+a source asset (PNG/SNDH) or a converter.
+
+**In the demo:** press **M** to flip the TV channel (A↔B), **Esc** to quit.
 
 ## Docs
 
 - [`ARCHITECTURE.md`](ARCHITECTURE.md) — layers, data flow, memory budget
 - [`decisions.md`](decisions.md) — ADRs for the non-obvious choices
-- [`PLAN.md`](PLAN.md) — phased plan, P0 through P10
+- [`STATUS.md`](STATUS.md) — session-by-session status (read first when picking up)
+- [`DEBUG.md`](DEBUG.md) — headless Hatari debugging (fifo + breakpoints)
+- [`PERF_REVIEW.md`](PERF_REVIEW.md) · [`PROFILE.md`](PROFILE.md) — the 1-VBL performance work
 
 ## Credits
 
