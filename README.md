@@ -5,6 +5,14 @@ ported from Shazz's 2011 HTML5/CODEF JavaScript version (`js_version/main.html`)
 
 Target: **Atari STE, 50 Hz PAL, low-res 320×200×16**. Tools: VASM + Hatari.
 
+## Screenshots
+
+| Channel A — Blade Runners | Channel B — MJJ |
+|:---:|:---:|
+| ![Channel A: Blade Runners logo and scroller over the gradient backdrop](docs/channel-a.png) | ![Channel B: MJJ graffiti logo and HOOKER gradient font](docs/channel-b.png) |
+
+Press **M** in the demo to flip between the two channels (with a TV-static transition).
+
 ## Build & run
 
 ```bash
