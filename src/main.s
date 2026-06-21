@@ -77,6 +77,10 @@ Main:
                     bsr         RemoveVBL
                     bsr         EnableMouse             ; hand mouse back to TOS
                     bsr         RestoreState            ; hand TOS back its palette/res/base
+                    move.w      #$2300, sr              ; restore TOS IPL (3) — our handlers are
+                                                        ; all removed, so leaving IPL at 7 here
+                                                        ; freezes TOS after Pterm0 (no VBL/keyboard
+                                                        ; → white screen, never reaches GEM)
                     bsr         SuperExit               ; back to user mode
 
                     clr.w       -(sp)                   ; Pterm0
