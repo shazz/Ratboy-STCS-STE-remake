@@ -44,4 +44,6 @@ In `docs/`:
 
 ## Tools
 
-- tools/cycles/README.md: a python tool to count used cycles
+- tools/cycles/README.md: a python tool to count used cycles in source code
+- build.sh: build script
+- run.sh: run script
